@@ -1,0 +1,10 @@
+# Build output
+/dcode
+
+# Default local data dirs (point [vault] dir / notes_dir elsewhere to keep these empty)
+/vault/
+/dcode-notes/
+/exports/
+
+# Personal config stays local; the repo ships config.example.toml as the template.
+/config.toml

@@ -1,0 +1,64 @@
+# d-code — example configuration.
+#
+# Copy this to "config.toml" and edit what you need:
+#
+#     cp config.example.toml config.toml
+#
+# Every field is OPTIONAL — d-code runs with sensible defaults and no config
+# file at all. The values shown here ARE the defaults unless noted; uncomment
+# and change only what you want to override. Relative paths are rooted at the
+# dcode directory; "~/" expands to your home directory.
+
+[ai]
+# provider: "openai" | "ollama" | "compatible"
+# It only picks the default base_url — an explicit base_url always wins.
+# With no API key and a non-Ollama provider, d-code runs OFFLINE on built-in
+# content (no network calls); the AI features then politely no-op.
+provider = "openai"
+# base_url overrides the provider default, e.g. for a local Ollama server:
+#   provider = "ollama"
+#   base_url = "http://localhost:11434/v1"
+# base_url = "http://localhost:11434/v1"
+# model = "gpt-4o-mini"            # e.g. "llama3.1" or "qwen2.5-coder" for Ollama
+
+# Two ways to provide the API key (Ollama needs none):
+#   1. api_key_env — the NAME of an environment variable holding your key,
+#      e.g. run  export OPENAI_API_KEY=sk-...  in your shell. This is NOT the
+#      key itself, just the variable to read it from. Preferred — the secret
+#      never lands in this file.
+#   2. api_key — paste the key directly. Easiest, but it then lives here in
+#      plaintext, so prefer api_key_env if you can.
+# The env var wins when both are set.
+api_key_env = "OPENAI_API_KEY"
+# api_key = "sk-..."
+# timeout_seconds = 120            # per-request timeout for AI calls
+
+[editor]
+# keybindings: "vim" | "default"
+keybindings = "vim"
+# line_numbers = false hides the number gutter — long code lines then wrap
+# cleanly without blank-gutter rows (and the editor gains four columns).
+line_numbers = true
+
+[navigation]
+# keybindings: "vim" | "default" (movement keys in the list/menus)
+keybindings = "vim"
+
+[ui]
+theme = "default"
+# Default pane split, in percent of the width (the editor takes the rest).
+# sidebar: 10-40, chat: 15-70. Comment out to keep the built-in defaults
+# (sidebar 22; chat 30 vertical / 55 horizontal). :compact / :wide adjust live.
+sidebar_percent = 22
+chat_percent = 30
+# Start with the left (notes) pane folded away — toggle live with :fold.
+sidebar_folded = false
+
+[vault]
+# dir is the source/code tree d-code browses (read-only) — point it at any
+# project. Unset keeps the default "vault" folder next to dcode.
+# dir = "~/code/some-project"
+#
+# notes_dir is where d-code SAVES explanations and notes (writable), kept
+# separate from your source so the repo stays clean. Default: "dcode-notes".
+# notes_dir = "~/Documents/dcode-notes"

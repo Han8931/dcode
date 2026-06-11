@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>d-code</title>
+<style>
+  :root {
+    --bg: #1e1f26; --panel: #25262e; --panel2: #2c2e38; --border: #3a3d4a;
+    --text: #e6e7ea; --muted: #9aa0ad; --accent: #6ea8fe; --ok: #6ee7a8;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 8px 14px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header .brand { font-weight: 700; letter-spacing: .3px; }
+  header .status { color: var(--muted); font-size: 12px; margin-left: auto; }
+  main { flex: 1; display: grid; grid-template-columns: 240px 1fr 320px; min-height: 0; }
+  .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  .pane h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    margin: 0; padding: 10px 12px 6px;
+  }
+  .scroll { overflow: auto; flex: 1; min-height: 0; }
+
+  /* sidebar */
+  .gen { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .gen input, .search input { width: 100%; }
+  input, textarea, button {
+    font: inherit; color: var(--text); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #11131a; border-color: var(--accent); font-weight: 600; }
+  .row { display: flex; gap: 6px; margin-top: 6px; }
+  .row > * { flex: 1; }
+  .search { padding: 8px 12px; }
+  .tree { padding: 4px 6px; }
+  .subject { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; margin: 8px 8px 2px; }
+  .note { padding: 5px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .note:hover { background: var(--panel2); }
+  .note.active { background: var(--accent); color: #11131a; }
+
+  /* editor */
+  .editor-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .editor-head .title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .editor-body { flex: 1; display: grid; grid-template-columns: 1fr; min-height: 0; }
+  .editor-body.split { grid-template-columns: 1fr 1fr; }
+  textarea#editor { width: 100%; height: 100%; resize: none; border: none; border-radius: 0;
+    background: #1b1c22; padding: 14px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .preview { padding: 14px 18px; overflow: auto; border-left: 1px solid var(--border); }
+  .preview h1, .preview h2, .preview h3 { line-height: 1.25; }
+  .preview pre { background: #1b1c22; padding: 10px; border-radius: 6px; overflow: auto; }
+  .preview code { background: #1b1c22; padding: 1px 4px; border-radius: 4px; }
+  .wikilink { color: var(--accent); text-decoration: none; border-bottom: 1px dashed var(--accent); }
+  .backlinks { border-top: 1px solid var(--border); padding: 8px 12px; }
+  .backlinks .blink { color: var(--accent); cursor: pointer; font-size: 13px; }
+
+  /* right pane */
+  .tabs { display: flex; gap: 4px; padding: 8px 12px 0; }
+  .tab { padding: 5px 10px; border-radius: 6px 6px 0 0; cursor: pointer; color: var(--muted); }
+  .tab.active { background: var(--panel2); color: var(--text); }
+  .tabpane { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  .tabpane.active { display: flex; }
+  .messages { flex: 1; overflow: auto; padding: 10px 12px; }
+  .msg { margin-bottom: 10px; }
+  .msg .who { font-size: 11px; color: var(--muted); }
+  .msg .body { white-space: pre-wrap; }
+  .msg.user .body { color: var(--ok); }
+  .composer { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
+  .composer textarea { flex: 1; height: 52px; resize: none; }
+  .study { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .study textarea { height: 120px; resize: vertical; }
+  .grade { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; white-space: pre-wrap; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .toast { position: fixed; bottom: 14px; right: 14px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">d-code</span>
+  <span class="muted" style="color:var(--muted);font-size:12px">decode your code</span>
+  <span class="status" id="status"></span>
+</header>
+
+<main>
+  <!-- LEFT: files -->
+  <section class="pane">
+    <h2>Files</h2>
+    <div class="gen">
+      <input id="genInput" placeholder="Write a note about… e.g. how HTTP works">
+      <div class="row">
+        <button class="primary" id="genBtn">Generate note</button>
+        <button id="newBtn" title="New blank note">New</button>
+      </div>
+    </div>
+    <div class="search"><input id="searchInput" placeholder="Filter files…"></div>
+    <div class="scroll"><div class="tree" id="tree"></div></div>
+  </section>
+
+  <!-- CENTER: editor + preview -->
+  <section class="pane">
+    <div class="editor-head">
+      <span class="title" id="noteTitle">No note open</span>
+      <button id="previewBtn">Preview</button>
+      <button class="primary" id="saveBtn">Save</button>
+    </div>
+    <div class="editor-body" id="editorBody">
+      <textarea id="editor" placeholder="Open a file from the tree…" spellcheck="false"></textarea>
+      <div class="preview" id="preview" style="display:none"></div>
+    </div>
+    <div class="backlinks" id="backlinks" style="display:none"></div>
+  </section>
+
+  <!-- RIGHT: chat -->
+  <section class="pane">
+    <div class="tabpane active" id="tab-chat">
+      <div class="messages" id="messages"><div class="empty">Open a file and ask about it.</div></div>
+      <div class="composer">
+        <textarea id="chatInput" placeholder="Ask about the open file… (Enter to send)"></textarea>
+        <button class="primary" id="chatSend">Send</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let notes = [];
+let current = null;     // current note path
+let chatHist = [];      // [{role, content}]
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1600);
+}
+function setStatus(s) { $("#status").textContent = s || ""; }
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const res = await fetch(url, opt);
+  if (!res.ok) { throw new Error((await res.text()) || res.statusText); }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : res.text();
+}
+
+// ---- vault tree ----
+async function loadTree() {
+  const data = await api("GET", "/api/tree");
+  notes = data.notes || [];
+  renderTree();
+}
+function renderTree() {
+  const filter = $("#searchInput").value.trim().toLowerCase();
+  const tree = $("#tree"); tree.innerHTML = "";
+  const shown = notes.filter(n => !filter ||
+    n.title.toLowerCase().includes(filter) || (n.subject||"").toLowerCase().includes(filter));
+  if (shown.length === 0) {
+    tree.innerHTML = '<div class="empty">No files yet.</div>';
+    return;
+  }
+  const groups = {};
+  for (const n of shown) { (groups[n.subject || "—"] ||= []).push(n); }
+  for (const subject of Object.keys(groups).sort()) {
+    const h = document.createElement("div"); h.className = "subject"; h.textContent = subject;
+    tree.appendChild(h);
+    for (const n of groups[subject]) {
+      const el = document.createElement("div");
+      el.className = "note" + (n.path === current ? " active" : "");
+      el.textContent = n.title; el.title = n.path;
+      el.onclick = () => openNote(n.path);
+      tree.appendChild(el);
+    }
+  }
+}
+
+// ---- editor ----
+async function openNote(path) {
+  try {
+    const n = await api("GET", "/api/note?path=" + encodeURIComponent(path));
+    current = n.path;
+    $("#noteTitle").textContent = n.title + (n.subject ? "  ·  " + n.subject : "");
+    $("#editor").value = n.body;
+    showPreview(false);
+    renderTree();
+    loadBacklinks();
+  } catch (e) { toast("Open failed: " + e.message); }
+}
+async function saveNote() {
+  if (!current) { toast("No note open"); return; }
+  try {
+    await api("PUT", "/api/note", { path: current, body: $("#editor").value });
+    toast("Saved");
+    if ($("#preview").style.display !== "none") refreshPreview();
+  } catch (e) { toast("Save failed: " + e.message); }
+}
+async function newNote() {
+  const title = prompt("New note title:");
+  if (!title) return;
+  const path = title.replace(/[\/\\:*?"<>|]+/g, "") + ".md";
+  current = path;
+  $("#noteTitle").textContent = title;
+  $("#editor").value = "# " + title + "\n\n";
+  await saveNote();
+  await loadTree();
+}
+async function generate() {
+  const req = $("#genInput").value.trim();
+  if (!req) { toast("Type a topic"); return; }
+  setStatus("generating note…");
+  $("#genBtn").disabled = true;
+  try {
+    const r = await api("POST", "/api/generate", { request: req });
+    $("#genInput").value = "";
+    await loadTree();
+    await openNote(r.path);
+    toast("Created: " + r.title);
+  } catch (e) { toast("Generate failed: " + e.message); }
+  finally { setStatus(""); $("#genBtn").disabled = false; }
+}
+
+// ---- preview + backlinks ----
+let previewOn = false;
+function showPreview(on) {
+  previewOn = on;
+  $("#preview").style.display = on ? "block" : "none";
+  $("#editorBody").classList.toggle("split", on);
+  $("#previewBtn").textContent = on ? "Hide preview" : "Preview";
+  if (on) refreshPreview();
+}
+async function refreshPreview() {
+  try {
+    const r = await api("POST", "/api/preview", { body: $("#editor").value });
+    $("#preview").innerHTML = r.html;
+    $("#preview").querySelectorAll(".wikilink").forEach(a => {
+      a.onclick = (e) => { e.preventDefault(); openByTarget(a.dataset.target); };
+    });
+  } catch (e) { $("#preview").textContent = "preview error: " + e.message; }
+}
+function openByTarget(target) {
+  const t = target.toLowerCase();
+  const hit = notes.find(n => n.title.toLowerCase() === t ||
+    n.path.toLowerCase().endsWith("/" + t + ".md") || n.path.toLowerCase() === t + ".md");
+  if (hit) openNote(hit.path); else toast('No note named "' + target + '" yet');
+}
+async function loadBacklinks() {
+  if (!current) return;
+  try {
+    const r = await api("GET", "/api/backlinks?path=" + encodeURIComponent(current));
+    const box = $("#backlinks");
+    const list = r.backlinks || [];
+    if (list.length === 0) { box.style.display = "none"; return; }
+    box.style.display = "block";
+    box.innerHTML = '<div class="subject">Linked from</div>';
+    for (const b of list) {
+      const el = document.createElement("span");
+      el.className = "blink"; el.textContent = "← " + b.title; el.style.display = "block";
+      el.onclick = () => openNote(b.path);
+      box.appendChild(el);
+    }
+  } catch (e) { /* non-fatal */ }
+}
+
+// ---- chat ----
+function renderChat() {
+  const box = $("#messages");
+  if (chatHist.length === 0) { box.innerHTML = '<div class="empty">Open a file and ask about it.</div>'; return; }
+  box.innerHTML = "";
+  for (const m of chatHist) {
+    const el = document.createElement("div");
+    el.className = "msg " + (m.role === "user" ? "user" : "assistant");
+    el.innerHTML = '<div class="who">' + (m.role === "user" ? "you" : "d-code") + '</div>';
+    const b = document.createElement("div"); b.className = "body"; b.textContent = m.content;
+    el.appendChild(b); box.appendChild(el);
+  }
+  box.scrollTop = box.scrollHeight;
+}
+async function sendChat() {
+  const text = $("#chatInput").value.trim();
+  if (!text) return;
+  chatHist.push({ role: "user", content: text });
+  $("#chatInput").value = ""; renderChat();
+  setStatus("thinking…");
+  // The reply streams as plain text chunks; grow a live assistant message.
+  // `path` grounds the reply in the currently open note.
+  chatHist.push({ role: "assistant", content: "" });
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history: chatHist.slice(0, -1), path: current || "" }),
+    });
+    if (!res.ok) { throw new Error((await res.text()) || res.statusText); }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chatHist[chatHist.length - 1].content += dec.decode(value, { stream: true });
+      renderChat();
+    }
+    if (!chatHist[chatHist.length - 1].content) chatHist.pop();
+  } catch (e) {
+    chatHist.pop();
+    toast("Chat failed: " + e.message);
+  }
+  finally { setStatus(""); renderChat(); }
+}
+
+// ---- wiring ----
+$("#genBtn").onclick = generate;
+$("#genInput").addEventListener("keydown", e => { if (e.key === "Enter") generate(); });
+$("#newBtn").onclick = newNote;
+$("#saveBtn").onclick = saveNote;
+$("#previewBtn").onclick = () => showPreview(!previewOn);
+$("#searchInput").addEventListener("input", renderTree);
+$("#chatSend").onclick = sendChat;
+$("#chatInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); saveNote(); }
+});
+
+loadTree().catch(e => toast("Load failed: " + e.message));
+</script>
+</body>
+</html>
