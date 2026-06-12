@@ -1,6 +1,6 @@
 <div align="center">
 
-# d-code
+# meari-dcode
 
 **Point it at a codebase. Decode it.**
 
@@ -15,7 +15,7 @@
 
 ## 📖 What it is
 
-**d-code** (from *decode*) is a local-first app for **understanding code**. Open a
+**meari-dcode** (from *decode*) is a local-first app for **understanding code**. Open a
 real source tree in a fast three-pane workspace — file tree, editor, AI chat —
 select a function or a whole file, and ask the model to **explain it**. The
 explanation streams into the chat grounded in the actual code, and you can save
@@ -32,12 +32,12 @@ it as a markdown note for later.
 It runs as a fast **terminal app** and a **local web app** — two thin front-ends
 over one shared Go core, working on the same files.
 
-## 💡 Why d-code?
+## 💡 Why meari-dcode?
 
-- 📁 **Your code stays yours.** Point it at any directory of source files. d-code
+- 📁 **Your code stays yours.** Point it at any directory of source files. meari-dcode
   reads them — it never rewrites your source. Explanations are saved as separate
   markdown notes in a dedicated folder, so your repo stays clean.
-- 🧩 **Context-aware explanations.** d-code grounds each explanation in the
+- 🧩 **Context-aware explanations.** meari-dcode grounds each explanation in the
   surrounding file — and, when a single file isn't enough, reaches across related
   files in the project — so the answer reflects how the code actually fits together.
 - ✍️ **Explanations become notes, not chat scroll.** Save a decode as a linked
@@ -80,7 +80,7 @@ model = "llama3.1"
 
 Then, inside the workspace:
 
-| You type | d-code does |
+| You type | meari-dcode does |
 |---|---|
 | `:explain` · `:decode` | 🔍 explains the open file (or your Visual selection) in the chat |
 | `,d` (in Visual mode) | 🔍 decode the selected lines — shortcut for `:decode` |
@@ -95,5 +95,5 @@ logic — both drive the same headless Go engine (`internal/core`).
 
 ## 🌱 Status
 
-In active development. d-code began as a learning-vault app (*Meari*) and is being
+In active development. meari-dcode began as a learning-vault app (*Meari*) and is being
 refocused into the code-decoding tool described above.

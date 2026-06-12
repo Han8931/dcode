@@ -9,6 +9,7 @@ package editor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -981,7 +982,7 @@ type vseg struct {
 func (m Model) visualLayout() (segs []vseg, cursorSeg int) {
 	lines := strings.Split(m.ta.Value(), "\n")
 	curRow, curCol := m.cursorPos()
-	contentW := m.width - visualGutterWidth(len(lines))
+	contentW := m.width - m.visualGutterWidth()
 	if contentW < 8 {
 		contentW = 8
 	}
@@ -998,8 +999,17 @@ func (m Model) visualLayout() (segs []vseg, cursorSeg int) {
 	return segs, cursorSeg
 }
 
-func visualGutterWidth(lineCount int) int {
-	return len(fmt.Sprintf("%d", lineCount)) + 2
+// visualGutterWidth matches the textarea's line-number gutter so entering
+// Visual mode doesn't shift the text horizontally. The textarea sizes its
+// gutter from MaxHeight (formatLineNumber: " %*v " with len(MaxHeight) digits),
+// not the live line count, so this must mirror that — using the line count here
+// produced a narrower gutter for short buffers and nudged every line left.
+func (m Model) visualGutterWidth() int {
+	maxHeight := m.ta.MaxHeight
+	if maxHeight <= 0 {
+		maxHeight = 1
+	}
+	return len(strconv.Itoa(maxHeight)) + 2
 }
 
 // visualHeight is the Visual window height (the textarea's row count).
@@ -1073,7 +1083,7 @@ func (m Model) visualView() string {
 	_, selStart, selCut := m.visualSpan()
 
 	height := m.visualHeight()
-	gutterW := visualGutterWidth(len(lines))
+	gutterW := m.visualGutterWidth()
 	segs, cursorSeg := m.visualLayout()
 
 	// The window was anchored on entry and scrolled by updateVisual; clamp
