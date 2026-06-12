@@ -982,12 +982,14 @@ type vseg struct {
 func (m Model) visualLayout() (segs []vseg, cursorSeg int) {
 	lines := strings.Split(m.ta.Value(), "\n")
 	curRow, curCol := m.cursorPos()
-	contentW := m.width - m.visualGutterWidth()
-	if contentW < 8 {
-		contentW = 8
+	// Wrap at the textarea's own content width with its own algorithm so the
+	// Visual rows match its viewport exactly (see wrapWords).
+	contentW := m.ta.Width()
+	if contentW < 1 {
+		contentW = 1
 	}
 	for li, line := range lines {
-		parts := wrapWidths([]rune(line), contentW)
+		parts := wrapWords([]rune(line), contentW)
 		for si, p := range parts {
 			s := vseg{lineIdx: li, start: p[0], end: p[1], first: si == 0}
 			if li == curRow && curCol >= p[0] && (curCol < p[1] || si == len(parts)-1) {
@@ -1193,25 +1195,71 @@ func renderSelSegment(line []rune, segStart, segEnd, flatStart, selStart, selCut
 	return b.String()
 }
 
-// wrapWidths splits a line of runes into display-width-bounded [start, end)
-// segments (soft wrap). A line always yields at least one (possibly empty)
-// segment so empty lines still occupy a row.
-func wrapWidths(line []rune, width int) [][2]int {
+// wrapWords splits a line of runes into [start, end) segments that match the
+// bubbles textarea's word-wrap (its unexported wrap), so the Visual renderer's
+// rows line up with the textarea's viewport. A plain width wrap broke lines at
+// different points than the textarea — words break on spaces, not mid-word — so
+// once any line wrapped, the two viewports diverged and the Visual view drifted
+// a row off. This mirrors every quirk that matters for row counts: trailing
+// spaces stay on the wrapped row, an over-long word is hard-broken, and a row
+// that exactly fills the width is followed by an empty segment. A line always
+// yields at least one (possibly empty) segment so empty lines still occupy a row.
+func wrapWords(line []rune, width int) [][2]int {
 	if len(line) == 0 {
 		return [][2]int{{0, 0}}
 	}
-	var out [][2]int
-	start, w := 0, 0
-	for i, r := range line {
-		rw := runewidth.RuneWidth(r)
-		if w+rw > width && i > start {
-			out = append(out, [2]int{start, i})
-			start, w = i, 0
-		}
-		w += rw
+	if width < 1 {
+		width = 1
 	}
-	out = append(out, [2]int{start, len(line)})
-	return out
+	var (
+		segs   [][2]int
+		start  int // original index where the open row begins
+		rowLen int // original runes committed to the open row
+		rowW   int // display width of the open row
+		word   []rune
+		wordW  int
+		spaces int
+	)
+	commit := func(n, w int) { rowLen += n; rowW += w }
+	newRow := func() {
+		segs = append(segs, [2]int{start, start + rowLen})
+		start += rowLen
+		rowLen, rowW = 0, 0
+	}
+	for _, r := range line {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+			wordW += runewidth.RuneWidth(r)
+		}
+		switch {
+		case spaces > 0:
+			// A word is complete; place it (with its trailing spaces) on the
+			// open row, or wrap to a new one if it no longer fits.
+			if rowW+wordW+spaces > width {
+				newRow()
+			}
+			commit(len(word)+spaces, wordW+spaces)
+			word, wordW, spaces = word[:0], 0, 0
+		case wordW+runewidth.RuneWidth(word[len(word)-1]) > width:
+			// A single word wider than the row: hard-break it like the textarea.
+			if rowLen > 0 {
+				newRow()
+			}
+			commit(len(word), wordW)
+			word, wordW = word[:0], 0
+		}
+	}
+	// Flush the final pending word; the textarea injects a trailing space here
+	// (not an original rune, so it never shifts a range) and pushes the word to a
+	// fresh row when the open one is already full.
+	if rowW+wordW+spaces >= width {
+		newRow()
+	}
+	commit(len(word)+spaces, wordW+spaces)
+	segs = append(segs, [2]int{start, start + rowLen})
+	return segs
 }
 
 // flatLineStarts returns each line's starting index in the flat rune view of

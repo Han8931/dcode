@@ -293,9 +293,9 @@ func TestVisualBadgeInStatusLine(t *testing.T) {
 	}
 }
 
-func TestWrapWidths(t *testing.T) {
-	// 10 runes, width 4 -> 3 segments.
-	segs := wrapWidths([]rune("abcdefghij"), 4)
+func TestWrapWords(t *testing.T) {
+	// A single 10-rune word, width 4 -> hard-broken into 3 segments.
+	segs := wrapWords([]rune("abcdefghij"), 4)
 	want := [][2]int{{0, 4}, {4, 8}, {8, 10}}
 	if len(segs) != len(want) {
 		t.Fatalf("segs = %v", segs)
@@ -305,13 +305,23 @@ func TestWrapWidths(t *testing.T) {
 			t.Fatalf("segs[%d] = %v, want %v", i, segs[i], want[i])
 		}
 	}
-	// Wide (CJK) runes count double.
-	segs = wrapWidths([]rune("한국어로"), 4)
-	if len(segs) != 2 || segs[0] != [2]int{0, 2} {
+	// Words break on spaces, not mid-word: "ab cd ef" at width 4 keeps each
+	// word+space together until it no longer fits.
+	segs = wrapWords([]rune("ab cd ef"), 4)
+	want = [][2]int{{0, 3}, {3, 6}, {6, 8}}
+	for i := range want {
+		if segs[i] != want[i] {
+			t.Fatalf("word segs = %v, want %v", segs, want)
+		}
+	}
+	// Wide (CJK) runes count double; a row that exactly fills the width is
+	// followed by an empty segment, matching the textarea.
+	segs = wrapWords([]rune("한국어로"), 4)
+	if len(segs) != 3 || segs[0] != [2]int{0, 2} || segs[2] != [2]int{4, 4} {
 		t.Fatalf("CJK segs = %v", segs)
 	}
 	// Empty line still yields one segment.
-	if segs := wrapWidths(nil, 4); len(segs) != 1 {
+	if segs := wrapWords(nil, 4); len(segs) != 1 {
 		t.Fatalf("empty segs = %v", segs)
 	}
 }
