@@ -19,6 +19,7 @@ package core
 import (
 	"fmt"
 	"path"
+	"strings"
 
 	"dcode/internal/vault"
 )
@@ -50,25 +51,36 @@ func (s *Service) allNotes() ([]vault.Note, error) {
 	return out, nil
 }
 
-// readNote loads a note by path from whichever root owns its kind.
+// readNote loads a note by path from whichever root owns it. A markdown note in
+// the writable notes root is read from there; anything else — a project's own
+// .md, a source file, or any other project file — belongs to the read-only code
+// root and opens as a "code" note (read-only, whole file as the body, binary
+// files shown as a placeholder).
 func (s *Service) readNote(p string) (vault.Note, error) {
-	if vault.IsSource(p) {
-		return s.code.Read(p)
+	if isMarkdown(p) && s.notes != nil && s.notes.Has(p) {
+		return s.notes.Read(p)
+	}
+	if s.code != nil && s.code.Has(p) {
+		return s.code.ReadSource(p)
 	}
 	if s.notes == nil {
-		return vault.Note{}, fmt.Errorf("no notes directory configured (%s)", p)
+		return vault.Note{}, fmt.Errorf("nothing at %s", p)
 	}
 	return s.notes.Read(p)
 }
 
-// writeNote saves a note. The source tree is read-only, so a source-file path is
-// rejected; everything else is written to the notes root.
+// writeNote saves a note. Only markdown notes are writable (they live in the
+// notes root); every other project file is read-only source, so its path is
+// rejected — d-code never rewrites the user's source.
 func (s *Service) writeNote(n vault.Note) (vault.Note, error) {
-	if vault.IsSource(n.RelPath) {
+	if !isMarkdown(n.RelPath) {
 		return vault.Note{}, fmt.Errorf("%q is read-only source and can't be edited", n.RelPath)
 	}
 	return s.writeToNotes(n)
 }
+
+// isMarkdown reports whether p names a markdown note (the only writable kind).
+func isMarkdown(p string) bool { return strings.EqualFold(path.Ext(p), ".md") }
 
 // writeToNotes writes a note (its RelPath relative to the notes root, or empty to
 // derive one) into the writable notes root.
@@ -79,24 +91,27 @@ func (s *Service) writeToNotes(n vault.Note) (vault.Note, error) {
 	return s.notes.Write(n)
 }
 
-// deletePath removes a note or directory; only the notes root is mutable.
+// deletePath removes a note or directory; only paths that exist in the writable
+// notes root are mutable, so read-only source files (and source directories) are
+// rejected rather than silently no-op'd.
 func (s *Service) deletePath(p string) error {
-	if vault.IsSource(p) {
-		return fmt.Errorf("%q is read-only source and can't be deleted", p)
-	}
 	if s.notes == nil {
 		return fmt.Errorf("nothing at %s", p)
+	}
+	if !s.notes.Exists(p) {
+		return fmt.Errorf("%q is read-only source and can't be deleted", p)
 	}
 	return s.notes.Delete(p)
 }
 
-// renamePath moves a note or directory within the writable notes root.
+// renamePath moves a note or directory within the writable notes root. The
+// source it would move must live in the notes root; read-only source is rejected.
 func (s *Service) renamePath(oldPath, newPath string) error {
-	if vault.IsSource(oldPath) {
-		return fmt.Errorf("%q is read-only source and can't be moved", oldPath)
-	}
 	if s.notes == nil {
 		return fmt.Errorf("nothing at %s", oldPath)
+	}
+	if !s.notes.Exists(oldPath) {
+		return fmt.Errorf("%q is read-only source and can't be moved", oldPath)
 	}
 	return s.notes.Rename(oldPath, newPath)
 }

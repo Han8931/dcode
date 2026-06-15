@@ -167,7 +167,7 @@ func TestSourceFilesAreReadOnlyAndNotesStaySeparate(t *testing.T) {
 	}
 
 	// The tree shows both, in one shared namespace.
-	tree, err := s.Tree()
+	tree, _, err := s.Tree()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +182,51 @@ func TestSourceFilesAreReadOnlyAndNotesStaySeparate(t *testing.T) {
 	}
 	if !sawSrc || !sawNote {
 		t.Fatalf("tree missing source or note: %+v", tree)
+	}
+}
+
+// TestRealTreeShowsNonSourceFilesReadOnly locks in the phase-1 behavior: the tree
+// shows every project file (not just an extension allowlist), and a non-source
+// file like a Makefile opens read-only and rejects writes.
+func TestRealTreeShowsNonSourceFilesReadOnly(t *testing.T) {
+	codeDir := t.TempDir()
+	notesDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codeDir, "Makefile"), []byte("all:\n\techo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, err := vault.OpenSource(codeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := vault.Open(notesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(code, notes, tutor.New(config.AIConfig{Provider: "openai"}))
+
+	tree, _, err := s.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawMakefile bool
+	for _, e := range tree {
+		if e.Path == "Makefile" {
+			sawMakefile = true
+		}
+	}
+	if !sawMakefile {
+		t.Fatalf("real tree should show Makefile: %+v", tree)
+	}
+
+	n, err := s.OpenNote("Makefile")
+	if err != nil {
+		t.Fatalf("OpenNote Makefile: %v", err)
+	}
+	if n.Source != "code" || !strings.Contains(n.Body, "echo hi") {
+		t.Fatalf("Makefile should open read-only with its content: %+v", n)
+	}
+	if _, err := s.SaveNote("Makefile", "tampered"); err == nil {
+		t.Fatal("writing to a non-source project file should be rejected")
 	}
 }
 

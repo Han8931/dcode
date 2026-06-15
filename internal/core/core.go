@@ -83,29 +83,23 @@ type TreeEntry struct {
 	Dir  bool   `json:"dir"`
 }
 
-// Tree returns the combined file structure — source files from the code root and
-// notes from the notes root, in one shared namespace — sorted by path with
-// directories de-duplicated across the two roots.
-func (s *Service) Tree() ([]TreeEntry, error) {
-	files, err := s.code.List()
+// Tree returns the combined file structure — the real project tree from the code
+// root (every file the ignore rules don't skip, not just an extension allowlist)
+// plus saved notes from the notes root, in one shared namespace — sorted by path
+// with directories de-duplicated across the two roots. Building it never reads
+// file contents. truncated is true if the project was larger than the tree cap.
+func (s *Service) Tree() (entries []TreeEntry, truncated bool, err error) {
+	nodes, truncated, err := s.code.Tree()
 	if err != nil {
-		return nil, err
-	}
-	dirs, err := s.code.Dirs()
-	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	seenDir := map[string]bool{}
-	out := make([]TreeEntry, 0, len(dirs)+len(files))
-	for _, d := range dirs {
-		seenDir[d] = true
-		out = append(out, TreeEntry{Path: d, Name: path.Base(d), Dir: true})
-	}
-	for _, n := range files {
-		if !vault.IsSource(n.RelPath) {
-			continue // .md files in the source tree are not d-code's to manage
+	out := make([]TreeEntry, 0, len(nodes))
+	for _, n := range nodes {
+		if n.IsDir {
+			seenDir[n.RelPath] = true
 		}
-		out = append(out, TreeEntry{Path: n.RelPath, Name: treeName(n.RelPath)})
+		out = append(out, TreeEntry{Path: n.RelPath, Name: n.Name, Dir: n.IsDir})
 	}
 	for _, e := range s.notesTree() {
 		if e.Dir && seenDir[e.Path] {
@@ -114,7 +108,7 @@ func (s *Service) Tree() ([]TreeEntry, error) {
 		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, nil
+	return out, truncated, nil
 }
 
 // treeName is a file's display name: source files keep their extension (core.go),

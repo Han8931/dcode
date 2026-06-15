@@ -56,7 +56,8 @@ sidebar_folded = false
 
 [vault]
 # dir is the source/code tree d-code browses (read-only) — point it at any
-# project. Unset keeps the default "vault" folder next to dcode.
+# project. Unset (and no path argument) decodes the current working directory,
+# so you can just run `dcode` inside a repo; `dcode <path>` overrides per-run.
 # dir = "~/code/some-project"
 #
 # notes_dir is where d-code SAVES explanations and notes (writable), kept

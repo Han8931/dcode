@@ -23,7 +23,6 @@ import (
 	"dcode/internal/core"
 	"dcode/internal/tui"
 	"dcode/internal/tutor"
-	"dcode/internal/vault"
 	"dcode/internal/web"
 )
 
@@ -49,6 +48,38 @@ func run() error {
 	return runTUI()
 }
 
+// buildService opens the project to decode and returns the engine over it. The
+// project is chosen most-specific first: a command-line path argument, then the
+// configured [vault] dir, then — with neither given — the current working
+// directory, so running `dcode` inside a repo just decodes that repo. The chosen
+// directory must already exist (a mistyped path is reported, never created), and
+// the opened project is remembered for the in-app recent-projects picker.
+func buildService(cfg config.Config, cliPath string) (*core.Service, error) {
+	var codeDir string
+	switch {
+	case cliPath != "":
+		abs, err := config.ResolveDir(cliPath)
+		if err != nil {
+			return nil, err
+		}
+		codeDir = abs
+	case cfg.Vault.Dir != "":
+		codeDir = cfg.VaultDir
+	default:
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		codeDir = wd
+	}
+	svc, err := core.OpenProject(codeDir, cfg.NotesDir, tutor.New(cfg.AI), false)
+	if err != nil {
+		return nil, fmt.Errorf("%w\n  pass a project path or set [vault] dir in config.toml", err)
+	}
+	_, _ = config.AddRecent(svc.ProjectRoot())
+	return svc, nil
+}
+
 // loadConfig loads config rooted at the working directory.
 func loadConfig(cfgPath string) (config.Config, string, error) {
 	wd, err := os.Getwd()
@@ -66,8 +97,8 @@ func runTUI() error {
 		defFlag = flag.Bool("default", false, "force default (non-Vim) keybindings")
 	)
 	flag.Parse()
-	if flag.NArg() > 0 {
-		return fmt.Errorf("unknown argument %q (subcommands: serve, check)", flag.Arg(0))
+	if flag.NArg() > 1 {
+		return fmt.Errorf("too many arguments; usage: dcode [flags] [project-path]")
 	}
 
 	cfg, _, err := loadConfig(*cfgPath)
@@ -82,15 +113,10 @@ func runTUI() error {
 		cfg.Editor.Keybindings = "default"
 	}
 
-	code, err := vault.Open(cfg.VaultDir)
+	svc, err := buildService(cfg, flag.Arg(0))
 	if err != nil {
 		return err
 	}
-	notes, err := vault.Open(cfg.NotesDir)
-	if err != nil {
-		return err
-	}
-	svc := core.New(code, notes, tutor.New(cfg.AI))
 	_, err = tui.RunVault(svc, cfg)
 	return err
 }
@@ -107,17 +133,12 @@ func runServe(args []string) error {
 		return err
 	}
 
-	code, err := vault.Open(cfg.VaultDir)
+	svc, err := buildService(cfg, fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	notes, err := vault.Open(cfg.NotesDir)
-	if err != nil {
-		return err
-	}
-	svc := core.New(code, notes, tutor.New(cfg.AI))
 
-	fmt.Printf("d-code web UI on http://localhost%s  (vault: %s)\n", *addr, cfg.VaultDir)
+	fmt.Printf("d-code web UI on http://localhost%s  (project: %s)\n", *addr, svc.ProjectRoot())
 	if svc.Offline() {
 		fmt.Println("(offline — no AI provider configured; set OPENAI_API_KEY or use Ollama for AI explanations)")
 	}

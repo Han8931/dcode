@@ -25,25 +25,15 @@ func (v *Vault) safeAbs(relPath string) (string, error) {
 }
 
 // Dirs returns every directory under the root (vault-relative, sorted),
-// including empty ones, so a tree view shows the learner's real structure.
-// Dot-directories (.obsidian, .dcode) are skipped, like List.
+// including empty ones, so a tree view shows the user's real structure. The
+// ignore rules (built-in defaults + .gitignore) are applied, so dependency and
+// build directories are skipped.
 func (v *Vault) Dirs() ([]string, error) {
 	var dirs []string
-	err := filepath.WalkDir(v.root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := v.walk(func(rel string, isDir bool) error {
+		if isDir {
+			dirs = append(dirs, rel)
 		}
-		if !d.IsDir() || path == v.root {
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		rel, err := filepath.Rel(v.root, path)
-		if err != nil {
-			return err
-		}
-		dirs = append(dirs, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {

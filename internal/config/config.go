@@ -31,8 +31,8 @@ type Config struct {
 type VaultConfig struct {
 	// Dir is the source/code tree d-code browses (read-only). It can sit outside
 	// the dcode directory (e.g. point it at any project). "~/" expands to the
-	// home directory; a relative path is rooted at the dcode base dir. Empty
-	// means the default <baseDir>/vault.
+	// home directory; a relative path is rooted at the dcode base dir. Empty (and
+	// no command-line path) means d-code decodes the current working directory.
 	Dir string `toml:"dir"`
 	// NotesDir is where d-code SAVES explanations and notes (writable), kept
 	// separate from the source so your code repo stays clean. Same path rules as
@@ -259,7 +259,8 @@ theme = "default"
 [vault]
 # dir is the source/code tree d-code browses (read-only). Point it at any
 # project. "~/" expands to your home; a relative path is rooted at the dcode
-# directory. Unset keeps the default "vault" folder next to dcode.
+# directory. Unset (and no path argument) decodes the current working directory,
+# so you can just run dcode inside a repo. Override per-run with: dcode <path>
 # dir = "~/code/some-project"
 # notes_dir is where d-code SAVES explanations and notes (writable), kept
 # separate from your source so the repo stays clean. Default: "dcode-notes".

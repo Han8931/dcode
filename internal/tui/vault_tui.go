@@ -122,6 +122,13 @@ type VaultModel struct {
 	finderCursor  int
 	finderResults []finderResult
 
+	// Open-project picker modal (",o" / ":open"). pickerMode is true while it is
+	// open; it lists recently opened projects and lets the user type a new path.
+	pickerMode    bool
+	pickerInput   textinput.Model
+	pickerCursor  int
+	pickerRecents []string
+
 	// Vim-style chords mirroring the coding TUI: pendingWindow is set after
 	// Ctrl-W (the next h/j/k/l picks a pane by direction); pendingLeader is set
 	// after "," in the editor's Normal mode (",n" folds the sidebar, ",ff"/",fg"
@@ -214,6 +221,11 @@ func newVaultModel(svc *core.Service, cfg config.Config) VaultModel {
 	fi.Prompt = "› "
 	m.finderInput = fi
 
+	pi := textinput.New()
+	pi.Prompt = "› "
+	pi.Placeholder = "~/code/some-project"
+	m.pickerInput = pi
+
 	if m.sidebarCollapsed {
 		m.focus = paneEditor
 	} else {
@@ -250,6 +262,9 @@ func (m VaultModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notes = msg.notes
 		m.tree = msg.tree
 		m.rebuildSidebar()
+		if msg.truncated {
+			m.flash("large project — file tree truncated; add ignores to narrow it")
+		}
 		return m, nil
 
 	case vOpenedMsg:
@@ -382,6 +397,9 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.finderMode != "" {
 		return m.updateFinder(msg)
 	}
+	if m.pickerMode {
+		return m.updatePicker(msg)
+	}
 	if m.cmdMode {
 		return m.updateCmdLine(msg)
 	}
@@ -427,6 +445,12 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openFinder("grep")
 		}
 		return m, nil
+	}
+
+	// ",o" opens the project picker from any pane — like the ",f?" finder chord,
+	// it must work on a fresh vault where focus starts on the sidebar.
+	if leader && msg.String() == "o" {
+		return m.openProjectPicker()
 	}
 
 	switch m.focus {
@@ -958,6 +982,130 @@ func fuzzyScore(query, candidate string) (int, bool) {
 	return score - len(c)/8, true
 }
 
+// --- open-project picker (",o" / ":open") ---
+
+// openProjectPicker opens the modal that switches the decoded project: a list of
+// recently opened projects plus a field to type a new path.
+func (m VaultModel) openProjectPicker() (tea.Model, tea.Cmd) {
+	m.pickerRecents = config.LoadRecents()
+	m.pickerMode = true
+	m.pickerCursor = 0
+	m.pickerInput.SetValue("")
+	m.pickerInput.CursorEnd()
+	m.pickerInput.Focus()
+	return m, nil
+}
+
+// projectCandidates is the picker's current row list: the typed path first (when
+// non-empty), then recent projects filtered by the typed text.
+func (m VaultModel) projectCandidates() []string {
+	q := strings.TrimSpace(m.pickerInput.Value())
+	var items []string
+	if q != "" {
+		items = append(items, q)
+	}
+	ql := strings.ToLower(q)
+	for _, r := range m.pickerRecents {
+		if r == q {
+			continue // already shown as the typed row
+		}
+		if q == "" || strings.Contains(strings.ToLower(r), ql) {
+			items = append(items, r)
+		}
+	}
+	return items
+}
+
+func (m VaultModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.pickerMode = false
+		m.pickerInput.Blur()
+		return m, nil
+	case tea.KeyEnter:
+		items := m.projectCandidates()
+		if len(items) == 0 {
+			return m, nil
+		}
+		if m.pickerCursor < 0 || m.pickerCursor >= len(items) {
+			m.pickerCursor = 0
+		}
+		choice := items[m.pickerCursor]
+		m.pickerMode = false
+		m.pickerInput.Blur()
+		return m.openProject(choice)
+	case tea.KeyUp:
+		if m.pickerCursor > 0 {
+			m.pickerCursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if m.pickerCursor < len(m.projectCandidates())-1 {
+			m.pickerCursor++
+		}
+		return m, nil
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	}
+	var cmd tea.Cmd
+	m.pickerInput, cmd = m.pickerInput.Update(msg)
+	m.pickerCursor = 0 // typing re-filters; start at the top
+	return m, cmd
+}
+
+// openProject switches the decoded project to the one at input (a typed path or a
+// recent), rebuilding the engine over the new source tree and resetting per-note
+// state. The old project's files, notes, and chat are dropped — its notes remain
+// on disk and return when it's reopened. Refuses to switch mid-stream.
+func (m VaultModel) openProject(input string) (tea.Model, tea.Cmd) {
+	if m.streaming {
+		m.flash("busy — wait for the reply to finish, then open")
+		return m, nil
+	}
+	abs, err := config.ResolveDir(input)
+	if err != nil {
+		m.flash("can't open: " + err.Error())
+		return m, nil
+	}
+	newSvc, err := m.svc.Reopen(abs, m.cfg.NotesDir)
+	if err != nil {
+		m.flash(err.Error())
+		return m, nil
+	}
+	m.pickerRecents, _ = config.AddRecent(newSvc.ProjectRoot())
+	m.svc = newSvc
+	m.resetForProject()
+	m.flash("opened " + newSvc.ProjectName())
+	return m, tea.Batch(m.setFocus(paneSidebar), vListCmd(m.svc))
+}
+
+// resetForProject clears everything tied to the previous project so a freshly
+// opened one starts clean: no open file, an empty editor and chat, and a folded-
+// shut tree (root open).
+func (m *VaultModel) resetForProject() {
+	m.current, m.currentTitle = "", ""
+	*m.curPath = ""
+	m.readOnly = false
+	m.editor.SetValue("")
+	m.editor.SetLanguage("markdown")
+	m.backlinks = nil
+	m.notes = nil
+	m.tree = nil
+	m.expanded = map[string]bool{vaultRootID: true}
+	m.marked = map[string]bool{}
+	m.chat = newChat()
+	m.chatByNote = map[string][]chatBlock{}
+	m.histByNote = map[string][]tutor.ChatTurn{}
+	m.chatHist = nil
+	m.lastExplain, m.lastExplainPath = "", ""
+	m.pendingEdit, m.pendingEditPath, m.pendingSel = "", "", nil
+	m.focusExcerpt = ""
+	m.confirmDel = nil
+	m.pendingNode = false
+	m.rebuildSidebar()
+	m.layout()
+}
+
 // openNodePrompt opens the status-row input for a node operation: "add"
 // collects a path for a new note/folder under the cursor's directory; "move"
 // collects the destination for a rename, prefilled with the current path.
@@ -1033,7 +1181,7 @@ func (m VaultModel) confirmDelete(it sidebarItem) (tea.Model, tea.Cmd) {
 var vaultExCmds = []string{
 	"apply", "ask", "backlinks", "compact", "copy", "decode", "discard", "discuss",
 	"edit", "explain", "export", "fold", "gen", "learn", "lesson", "links", "new",
-	"note", "paste", "polish", "q", "quit", "sidebar", "wide", "yank",
+	"note", "open", "paste", "polish", "q", "quit", "sidebar", "wide", "yank",
 }
 
 // runEx dispatches a vault ex-command (without the leading colon).
@@ -1060,6 +1208,11 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		}
 		path := args + ".md"
 		return m, vSaveOpenCmd(m.svc, path, "# "+args+"\n\n")
+	case "open":
+		if args == "" {
+			return m.openProjectPicker() // ":open" alone opens the picker
+		}
+		return m.openProject(args)
 	case "fold", "sidebar":
 		return m.cmdFold()
 	case "compact":
@@ -1113,7 +1266,7 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	default:
 		m.flash("unknown command: :" + raw +
-			"  (try :explain · :decode · :note · :ask · :polish · :new · :backlinks · :fold · :q)")
+			"  (try :explain · :decode · :note · :ask · :polish · :new · :open · :backlinks · :fold · :q)")
 		return m, nil
 	}
 }
@@ -1690,6 +1843,9 @@ func (m VaultModel) View() string {
 	if m.finderMode != "" {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.finderView())
 	}
+	if m.pickerMode {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.pickerView())
+	}
 	return frame
 }
 
@@ -1775,6 +1931,50 @@ func (m VaultModel) finderView() string {
 		Render(b.String())
 }
 
+// pickerView renders the open-project modal: a path field over the list of
+// recent projects (filtered by what's typed). It mirrors finderView's framing.
+func (m VaultModel) pickerView() string {
+	w := clampRange(m.width-10, 40, 92)
+	if m.width < 50 {
+		w = clampMin(m.width-4, 24)
+	}
+	inner := clampMin(w-6, 12)
+	items := m.projectCandidates()
+	maxRows := min(len(items), 12)
+
+	var b strings.Builder
+	b.WriteString(titleBar.Render(" Open project "))
+	b.WriteString("\n\n")
+	b.WriteString(m.pickerInput.View())
+	b.WriteString("\n\n")
+	if len(items) == 0 {
+		b.WriteString(hintStyle.Render("type a project path, or open one to build a recent list"))
+	} else {
+		for i := 0; i < maxRows; i++ {
+			label := truncate(items[i], inner-2)
+			if i == m.pickerCursor {
+				b.WriteString(selectedRow.Width(inner).Render("▸ " + label))
+			} else {
+				b.WriteString("  " + label)
+			}
+			if i < maxRows-1 {
+				b.WriteString("\n")
+			}
+		}
+		if len(items) > maxRows {
+			b.WriteString("\n" + hintStyle.Render("  +"+itoa(len(items)-maxRows)+" more"))
+		}
+	}
+	b.WriteString("\n\n")
+	b.WriteString(hintStyle.Render(",o · type a path · ↑↓ pick recent · enter open · esc close"))
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 2).
+		Width(w).
+		Render(b.String())
+}
+
 // backlinkFooterLines renders the "↩ Linked mentions" panel under the editor for
 // the open note (Obsidian-style). Empty when toggled off via :backlinks, or when
 // nothing links here.
@@ -1801,6 +2001,9 @@ func (m VaultModel) backlinkFooterLines(w int) []string {
 
 func (m VaultModel) titleView() string {
 	t := "d-code"
+	if name := m.svc.ProjectName(); name != "" {
+		t += " · " + name
+	}
 	if m.svc.Offline() {
 		t += "  (offline)"
 	}
@@ -1845,7 +2048,7 @@ func (m VaultModel) statusView() string {
 	case m.pendingWindow:
 		hints = errStyle.Render("⌃w") + " window: h/l choose pane"
 	case m.focus == paneSidebar:
-		hints = "j/k move · enter open · ,ff find · space mark · m node ops · r refresh · : cmds"
+		hints = "j/k move · enter open · ,o project · ,ff find · space mark · m node ops · : cmds"
 	case m.focus == paneEditor && m.readOnly:
 		hints = ":explain decode file · select+,d decode lines · :note save · ,ff find · ,n fold"
 	case m.focus == paneEditor:
@@ -1900,8 +2103,9 @@ func itoa(n int) string {
 
 type (
 	vNotesMsg struct {
-		notes []core.NoteMeta
-		tree  []core.TreeEntry
+		notes     []core.NoteMeta
+		tree      []core.TreeEntry
+		truncated bool // the project exceeded the tree cap; the listing is partial
 	}
 	vOpenedMsg    struct{ note core.Note }
 	vBacklinksMsg struct {
@@ -1926,11 +2130,11 @@ func vListCmd(svc *core.Service) tea.Cmd {
 		if err != nil {
 			return vErrMsg{kind: "list", err: err}
 		}
-		tree, err := svc.Tree()
+		tree, truncated, err := svc.Tree()
 		if err != nil {
 			return vErrMsg{kind: "list", err: err}
 		}
-		return vNotesMsg{notes: notes, tree: tree}
+		return vNotesMsg{notes: notes, tree: tree, truncated: truncated}
 	}
 }
 

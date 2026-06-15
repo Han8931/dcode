@@ -53,16 +53,39 @@ over one shared Go core, working on the same files.
 
 ## 🚀 Quick start
 
-```bash
-go build -o dcode .
+Install it once, then run it anywhere:
 
-./dcode            # the workspace, in your terminal
-./dcode serve      # the same workspace, in your browser
-./dcode check      # verify your AI provider end-to-end
+```bash
+go install .         # builds and drops `dcode` on your PATH (~/go/bin)
 ```
 
-Point it at the code you want to understand, and wire up an AI. Copy the
-documented template and edit what you need (everything is optional):
+```bash
+dcode                  # decode the current directory, in your terminal
+dcode ~/code/project   # decode a specific project
+dcode serve            # the same workspace, in your browser
+dcode check            # verify your AI provider end-to-end
+```
+
+> Prefer not to install? `go build -o dcode .` and run `./dcode` from the repo.
+
+### Opening a project
+
+Run `dcode` inside a repo and it decodes **that repo** — no config needed. The
+source tree is chosen most-specific first:
+
+1. a path argument — `dcode ~/code/foo`
+2. the configured `[vault] dir` (see below)
+3. otherwise, the **current directory**
+
+You can also switch projects without leaving the app: press **`,o`** (or run
+**`:open <path>`**) for a picker that lists **recently opened projects** and lets
+you type a new path. Your code is always read **read-only** — meari-dcode never
+rewrites your source.
+
+### Configuration (optional)
+
+To set a default project and wire up an AI, copy the documented template and
+edit what you need (everything is optional):
 
 ```bash
 cp config.example.toml config.toml
@@ -71,21 +94,23 @@ cp config.example.toml config.toml
 ```toml
 # config.toml
 [vault]
-dir = "~/code/some-project"   # the source tree to browse (default: ./vault)
+dir = "~/code/some-project"   # source tree to browse (default: current directory)
 
 [ai]
 provider = "ollama"           # or "openai" / any compatible endpoint
 model = "llama3.1"
 ```
 
-Then, inside the workspace:
+### Working inside the workspace
 
 | You type | meari-dcode does |
 |---|---|
 | `:explain` · `:decode` | 🔍 explains the open file (or your Visual selection) in the chat |
 | `,d` (in Visual mode) | 🔍 decode the selected lines — shortcut for `:decode` |
-| `:note` | 📝 saves the current explanation as a markdown note |
 | `:ask is this thread-safe?` | 💬 a grounded chat about the open file or selection |
+| `,o` · `:open <path>` | 📂 switch to another project (recent list + path entry) |
+| `,ff` · `,fg` | 🔎 fuzzy-find files / search contents |
+| `:note` | 📝 saves the current explanation as a markdown note |
 | `:polish` · `:edit make this tighter` | 🪄 an AI rewrite of a note, to review then `:apply` |
 
 ## 🧩 One core, two faces

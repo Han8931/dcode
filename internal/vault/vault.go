@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -79,7 +80,8 @@ type Vault struct {
 	root string
 }
 
-// Open returns a Vault rooted at dir, creating the directory if needed.
+// Open returns a Vault rooted at dir, creating the directory if needed. Use this
+// for the WRITABLE notes root, where an empty starting directory is expected.
 func Open(dir string) (*Vault, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -87,8 +89,32 @@ func Open(dir string) (*Vault, error) {
 	return &Vault{root: dir}, nil
 }
 
+// OpenSource returns a Vault over an EXISTING source tree without creating it: a
+// missing or non-directory path is an error, so a mistyped project path is
+// reported instead of silently materializing an empty folder. Use this for the
+// read-only code root the user is decoding.
+func OpenSource(dir string) (*Vault, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("project directory not found: %s", dir)
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("project path is not a directory: %s", dir)
+	}
+	return &Vault{root: dir}, nil
+}
+
 // Root returns the vault's base directory.
 func (v *Vault) Root() string { return v.root }
+
+// Has reports whether a file (not a directory) exists at relPath under the root.
+func (v *Vault) Has(relPath string) bool {
+	info, err := os.Stat(filepath.Join(v.root, filepath.FromSlash(relPath)))
+	return err == nil && !info.IsDir()
+}
 
 // --- parsing & serialization (pure, no I/O) ---
 
@@ -191,6 +217,37 @@ func (n Note) Marshal() []byte {
 
 // --- disk operations ---
 
+// Exists reports whether anything (a file or a directory) exists at relPath.
+func (v *Vault) Exists(relPath string) bool {
+	_, err := os.Stat(filepath.Join(v.root, filepath.FromSlash(relPath)))
+	return err == nil
+}
+
+// ReadSource reads a file from the (read-only) source tree as a code Note: its
+// whole content becomes the body and Source is "code", regardless of extension,
+// so any project file opens read-only. A binary file is returned with a short
+// placeholder body instead of its raw bytes, so the UI never dumps binary into
+// the editor.
+func (v *Vault) ReadSource(relPath string) (Note, error) {
+	abs := filepath.Join(v.root, filepath.FromSlash(relPath))
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return Note{}, err
+	}
+	n := Note{
+		Path:    abs,
+		RelPath: relPath,
+		Title:   path.Base(relPath),
+		Source:  "code",
+	}
+	if isBinary(raw) {
+		n.Body = fmt.Sprintf("(binary file — %d bytes, not shown)", len(raw))
+	} else {
+		n.Body = string(raw)
+	}
+	return n, nil
+}
+
 // Read loads and parses the note at relPath.
 func (v *Vault) Read(relPath string) (Note, error) {
 	abs := filepath.Join(v.root, relPath)
@@ -231,30 +288,113 @@ func (v *Vault) Write(n Note) (Note, error) {
 	return n, nil
 }
 
-// List walks the vault and returns every markdown note and source file, sorted
-// by RelPath. Dot-directories (e.g. ".dcode") are skipped so app-managed files
-// never appear.
-func (v *Vault) List() ([]Note, error) {
-	var notes []Note
-	err := filepath.WalkDir(v.root, func(path string, d os.DirEntry, err error) error {
+// TreeNode is one entry of the vault's on-disk structure — a directory or a
+// file — located by its slash path relative to the root. It carries no file
+// contents: building a tree never reads file bodies, so pointing d-code at a
+// large project is cheap.
+type TreeNode struct {
+	RelPath string
+	Name    string
+	IsDir   bool
+}
+
+// maxTreeFiles bounds how many files Tree returns, a backstop against a runaway
+// directory that slips past the ignore rules. Hitting it sets truncated so the
+// caller can tell the user the listing is incomplete rather than silently
+// showing a partial tree.
+const maxTreeFiles = 50000
+
+// Tree walks the vault and returns its real directory structure — every file and
+// directory that the ignore rules (built-in defaults + .gitignore) don't skip —
+// WITHOUT reading any file contents. Entries are sorted by path. truncated is
+// true if the listing was cut off at maxTreeFiles.
+func (v *Vault) Tree() (nodes []TreeNode, truncated bool, err error) {
+	files := 0
+	walkErr := v.walk(func(rel string, isDir bool) error {
+		if !isDir {
+			if files >= maxTreeFiles {
+				truncated = true
+				return errStopWalk
+			}
+			files++
+		}
+		nodes = append(nodes, TreeNode{RelPath: rel, Name: path.Base(rel), IsDir: isDir})
+		return nil
+	})
+	if walkErr != nil && walkErr != errStopWalk {
+		return nil, false, walkErr
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].RelPath < nodes[j].RelPath })
+	return nodes, truncated, nil
+}
+
+// errStopWalk halts a walk early without being a real error (e.g. when a cap is
+// reached).
+var errStopWalk = fmt.Errorf("walk stopped")
+
+// walk traverses the vault depth-first, invoking fn for every non-ignored
+// directory and file (rel is a slash path relative to the root). The ignore
+// stack — the built-in defaults plus a .gitignore per directory — is maintained
+// automatically, so ignored directories are pruned (never descended) and ignored
+// files never reach fn. fn returning an error stops the walk and propagates it.
+func (v *Vault) walk(fn func(rel string, isDir bool) error) error {
+	var stack ignoreStack
+	if data, err := os.ReadFile(filepath.Join(v.root, ".gitignore")); err == nil {
+		stack.push("", parseGitignore(data))
+	}
+	return filepath.WalkDir(v.root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			if path != v.root && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
+		if p == v.root {
 			return nil
 		}
-		if !listable(d.Name()) {
-			return nil
-		}
-		rel, err := filepath.Rel(v.root, path)
+		rel, err := filepath.Rel(v.root, p)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		raw, err := os.ReadFile(path)
+
+		// Prune .gitignore frames that aren't ancestors of this entry's directory
+		// so siblings never inherit each other's rules.
+		stack.truncateTo(slashDir(rel))
+
+		if d.IsDir() {
+			if stack.ignored(rel, true) {
+				return filepath.SkipDir
+			}
+			if data, err := os.ReadFile(filepath.Join(p, ".gitignore")); err == nil {
+				stack.push(rel, parseGitignore(data))
+			}
+			return fn(rel, true)
+		}
+		if stack.ignored(rel, false) {
+			return nil
+		}
+		return fn(rel, false)
+	})
+}
+
+// slashDir returns the parent directory of a slash path ("" for a top-level
+// entry).
+func slashDir(rel string) string {
+	if i := strings.LastIndexByte(rel, '/'); i >= 0 {
+		return rel[:i]
+	}
+	return ""
+}
+
+// List walks the vault and returns every markdown note and source file, sorted
+// by RelPath, reading each file's contents. The ignore rules (defaults +
+// .gitignore) are applied so dependency and build trees are never read.
+func (v *Vault) List() ([]Note, error) {
+	var notes []Note
+	err := v.walk(func(rel string, isDir bool) error {
+		if isDir || !listable(rel) {
+			return nil
+		}
+		abs := filepath.Join(v.root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(abs)
 		if err != nil {
 			return err
 		}
@@ -262,7 +402,7 @@ func (v *Vault) List() ([]Note, error) {
 		if err != nil {
 			return err
 		}
-		n.Path = path
+		n.Path = abs
 		notes = append(notes, n)
 		return nil
 	})
@@ -271,6 +411,17 @@ func (v *Vault) List() ([]Note, error) {
 	}
 	sort.Slice(notes, func(i, j int) bool { return notes[i].RelPath < notes[j].RelPath })
 	return notes, nil
+}
+
+// isBinary reports whether raw looks like a binary file (a NUL byte in the first
+// chunk), so the UI can show a placeholder instead of dumping bytes into the
+// editor.
+func isBinary(raw []byte) bool {
+	n := len(raw)
+	if n > 8000 {
+		n = 8000
+	}
+	return bytes.IndexByte(raw[:n], 0) >= 0
 }
 
 // --- wikilinks ---
