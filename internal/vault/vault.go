@@ -111,8 +111,13 @@ func OpenSource(dir string) (*Vault, error) {
 func (v *Vault) Root() string { return v.root }
 
 // Has reports whether a file (not a directory) exists at relPath under the root.
+// A path that escapes the root (absolute or "../…") is treated as absent.
 func (v *Vault) Has(relPath string) bool {
-	info, err := os.Stat(filepath.Join(v.root, filepath.FromSlash(relPath)))
+	abs, err := v.safeAbs(relPath)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(abs)
 	return err == nil && !info.IsDir()
 }
 
@@ -217,9 +222,14 @@ func (n Note) Marshal() []byte {
 
 // --- disk operations ---
 
-// Exists reports whether anything (a file or a directory) exists at relPath.
+// Exists reports whether anything (a file or a directory) exists at relPath. A
+// path that escapes the root (absolute or "../…") is treated as absent.
 func (v *Vault) Exists(relPath string) bool {
-	_, err := os.Stat(filepath.Join(v.root, filepath.FromSlash(relPath)))
+	abs, err := v.safeAbs(relPath)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(abs)
 	return err == nil
 }
 
@@ -229,7 +239,10 @@ func (v *Vault) Exists(relPath string) bool {
 // placeholder body instead of its raw bytes, so the UI never dumps binary into
 // the editor.
 func (v *Vault) ReadSource(relPath string) (Note, error) {
-	abs := filepath.Join(v.root, filepath.FromSlash(relPath))
+	abs, err := v.safeAbs(relPath)
+	if err != nil {
+		return Note{}, err
+	}
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err
@@ -250,7 +263,10 @@ func (v *Vault) ReadSource(relPath string) (Note, error) {
 
 // Read loads and parses the note at relPath.
 func (v *Vault) Read(relPath string) (Note, error) {
-	abs := filepath.Join(v.root, relPath)
+	abs, err := v.safeAbs(relPath)
+	if err != nil {
+		return Note{}, err
+	}
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err

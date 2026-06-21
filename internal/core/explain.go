@@ -17,9 +17,12 @@ import (
 // still carrying enough surrounding code to be useful.
 const (
 	maxExplainCodeChars = 16000 // the file being explained
-	maxProjectCtxChars  = 6000  // the related-files digest, total
+	maxProjectCtxChars  = 7000  // the related-files digest, total
 	projectSiblingHead  = 40    // lines of each related file included
-	maxProjectSiblings  = 6     // how many related files' contents to include
+	refDefWindow        = 24    // lines shown around each referenced definition
+	refDefLead          = 4     // lines of lead-in above the definition (doc comment, related decls)
+	maxProjectSiblings  = 6     // how many directory-neighbour files to inline
+	maxRefDefs          = 6     // how many referenced-definition files to inline
 	maxProjectFileList  = 200   // how many source paths to list in the project map
 )
 
@@ -56,11 +59,14 @@ func (s *Service) ExplainStream(ctx context.Context, req ExplainRequest, onDelta
 // part of a project, not a single file in isolation:
 //
 //  1. a map of the whole project's source files (paths only, capped), so the
-//     model knows the overall structure and what else exists; and
-//  2. the contents (truncated) of the target's directory neighbours — its
-//     package/module siblings, the files most likely to be needed to explain it.
+//     model knows the overall structure and what else exists;
+//  2. the DEFINITIONS the file depends on — for each top-level symbol it
+//     references that's defined elsewhere, a focused snippet of that definition,
+//     a poor-man's "go to definition" (see symbols.go); and
+//  3. the contents (truncated) of any remaining directory neighbours — its
+//     package/module siblings — to fill out the budget.
 //
-// It reads only the read-only source root. A fuller version can follow imports.
+// It reads only the read-only source root.
 func (s *Service) projectContext(p string) string {
 	if !vault.IsSource(p) {
 		return ""
@@ -72,9 +78,16 @@ func (s *Service) projectContext(p string) string {
 
 	// (1) Project file map — all source paths, capped.
 	var paths []string
+	bodyOf := make(map[string]string, len(files))
+	var target vault.Note
 	for _, f := range files {
-		if vault.IsSource(f.RelPath) {
-			paths = append(paths, f.RelPath)
+		if !vault.IsSource(f.RelPath) {
+			continue
+		}
+		paths = append(paths, f.RelPath)
+		bodyOf[f.RelPath] = f.Body
+		if f.RelPath == p {
+			target = f
 		}
 	}
 	var b strings.Builder
@@ -92,16 +105,37 @@ func (s *Service) projectContext(p string) string {
 		}
 	}
 
-	// (2) Directory neighbours' contents (the package the file lives in).
+	included := map[string]bool{p: true} // never inline the target's own body
+
+	// (2) Referenced definitions — the cross-file symbols the file actually uses.
+	idx := buildSymbolIndex(files)
+	refs := 0
+	for _, rf := range referencedFiles(target, idx) {
+		if refs >= maxRefDefs || b.Len() >= maxProjectCtxChars {
+			break
+		}
+		if included[rf.file] {
+			continue
+		}
+		included[rf.file] = true
+		b.WriteString("\n--- " + rf.file + " (defines " + strings.Join(rf.names, ", ") + ") ---\n")
+		b.WriteString(windowLines(bodyOf[rf.file], rf.line-refDefLead, refDefWindow))
+		b.WriteString("\n")
+		refs++
+	}
+
+	// (3) Directory neighbours' contents (the package the file lives in), for any
+	// budget left after the referenced definitions.
 	dir := path.Dir(p)
 	n := 0
 	for _, f := range files {
 		if n >= maxProjectSiblings || b.Len() >= maxProjectCtxChars {
 			break
 		}
-		if !vault.IsSource(f.RelPath) || f.RelPath == p || path.Dir(f.RelPath) != dir {
+		if !vault.IsSource(f.RelPath) || included[f.RelPath] || path.Dir(f.RelPath) != dir {
 			continue
 		}
+		included[f.RelPath] = true
 		b.WriteString("\n--- " + f.RelPath + " ---\n")
 		b.WriteString(headLines(f.Body, projectSiblingHead))
 		b.WriteString("\n")

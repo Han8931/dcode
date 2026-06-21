@@ -38,8 +38,9 @@ over one shared Go core, working on the same files.
   reads them — it never rewrites your source. Explanations are saved as separate
   markdown notes in a dedicated folder, so your repo stays clean.
 - 🧩 **Context-aware explanations.** meari-dcode grounds each explanation in the
-  surrounding file — and, when a single file isn't enough, reaches across related
-  files in the project — so the answer reflects how the code actually fits together.
+  surrounding file — and, when a single file isn't enough, pulls in the
+  *definitions* it depends on (the symbols it references, defined elsewhere in the
+  project) — so the answer reflects how the code actually fits together.
 - ✍️ **Explanations become notes, not chat scroll.** Save a decode as a linked
   markdown note you own, edit, and revisit.
 - 🪄 **Edit your notes with AI.** `:polish` / `:edit` rewrite a note (or a Visual
@@ -107,6 +108,8 @@ model = "llama3.1"
 |---|---|
 | `:explain` · `:decode` | 🔍 explains the open file (or your Visual selection) in the chat |
 | `,d` (in Visual mode) | 🔍 decode the selected lines — shortcut for `:decode` |
+| `:overview` | 🗺️ a whole-project architecture overview, saved as an `OVERVIEW` note |
+| `:diff` · `:diff main` | 🔀 explains your changes (`git diff`), saved as a note under `diffs/` |
 | `:ask is this thread-safe?` | 💬 a grounded chat about the open file or selection |
 | `,o` · `:open <path>` | 📂 switch to another project (recent list + path entry) |
 | `,ff` · `,fg` | 🔎 fuzzy-find files / search contents |

@@ -45,6 +45,13 @@ type VaultModel struct {
 	lastExplain     string
 	lastExplainPath string
 
+	// :overview / :diff state. The active stream is marked so its completed text
+	// auto-saves as a note (a top-level overview, or a change note under diffs/).
+	// diffRev is the git range :diff was invoked with, for the saved note's name.
+	overviewMode bool
+	diffMode     bool
+	diffRev      string
+
 	sidebar sidebarModel
 	editor  editor.Model
 	chat    chatModel
@@ -174,6 +181,14 @@ type finderResult struct {
 func RunVault(svc *core.Service, cfg config.Config) (Outcome, error) {
 	enableTUIColor()
 	m := newVaultModel(svc, cfg)
+	// Open into the project picker on every launch so the user can pick a recent
+	// project (or type a path) before diving in. The service we were built over —
+	// the cwd / path arg / configured [vault] dir — is live underneath, so
+	// dismissing the picker with Esc simply decodes that. buildService records the
+	// launched project as the most-recent entry, so it sits pre-selected at the top.
+	m.pickerRecents = config.LoadRecents()
+	m.pickerMode = true
+	m.pickerInput.Focus()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	final, err := p.Run()
 	out := Outcome{}
@@ -580,6 +595,16 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if msg.String() == "," && m.editor.NormalMode() {
 			m.pendingLeader = true
 			return m, nil
+		}
+		// ":" in Normal mode opens the global command line in the bottom status bar
+		// — the same input the sidebar and chat panes use — instead of the editor's
+		// own, which would render mid-pane. Visual-mode ":" is left to the editor so
+		// it can carry the selection span (RunCommandMsg) for :polish/:edit.
+		if msg.String() == ":" && m.editor.NormalMode() {
+			m.cmdMode = true
+			m.cmdLine.SetValue("")
+			m.cmdHist.Open()
+			return m, m.cmdLine.Focus()
 		}
 		tm, cmd := m.editor.Update(msg)
 		m.editor = tm.(editor.Model)
@@ -1179,9 +1204,10 @@ func (m VaultModel) confirmDelete(it sidebarItem) (tea.Model, tea.Cmd) {
 // vaultExCmds lists every command runEx accepts (aliases included), sorted,
 // for Tab completion in the command prompt.
 var vaultExCmds = []string{
-	"apply", "ask", "backlinks", "compact", "copy", "decode", "discard", "discuss",
-	"edit", "explain", "export", "fold", "gen", "learn", "lesson", "links", "new",
-	"note", "open", "paste", "polish", "q", "quit", "sidebar", "wide", "yank",
+	"apply", "ask", "backlinks", "compact", "copy", "decode", "diff", "discard",
+	"discuss", "edit", "explain", "export", "fold", "gen", "learn", "lesson", "links",
+	"new", "note", "open", "overview", "paste", "polish", "q", "quit", "sidebar",
+	"submit", "w", "wide", "wq", "write", "yank",
 }
 
 // runEx dispatches a vault ex-command (without the leading colon).
@@ -1229,6 +1255,10 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		return m.cmdPolish(args)
 	case "explain", "decode":
 		return m.cmdExplain(args)
+	case "overview":
+		return m.cmdOverview()
+	case "diff":
+		return m.cmdDiff(args)
 	case "note":
 		return m.cmdSaveExplanation()
 	case "apply":
@@ -1262,6 +1292,25 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 			m.flash("backlinks panel off")
 		}
 		return m, nil
+	case "w", "write":
+		// Save the open note and stay (Vim ":w"). Source files are read-only, so
+		// there is nothing to write — say so rather than erroring on the save.
+		if m.current == "" {
+			m.flash("nothing open to save")
+			return m, nil
+		}
+		if m.readOnly {
+			m.flash(m.currentTitle + " is read-only source — not saved")
+			return m, nil
+		}
+		m.flash("saved ✓")
+		return m, vSaveCmd(m.svc, m.current, m.editor.Value())
+	case "wq", "submit":
+		if m.readOnly {
+			m.flash(m.currentTitle + " is read-only source — not saved")
+			return m, nil
+		}
+		return m.submitEditor()
 	case "q", "quit":
 		return m, tea.Quit
 	default:
@@ -1475,6 +1524,8 @@ func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 			m.streamStopping = false
 			m.polishing = false
 			m.explaining = false
+			m.overviewMode = false
+			m.diffMode = false
 			m.streamCancel = nil
 			m.chat.append(roleSystem, "— tutor reply stopped —")
 			return m, nil
@@ -1486,6 +1537,8 @@ func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.polishing = false
 		m.explaining = false
+		m.overviewMode = false
+		m.diffMode = false
 		m.streamCancel = nil
 		m.chat.failStream("⚠ chat failed: " + msg.err.Error())
 		return m, nil
@@ -1500,6 +1553,16 @@ func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 			m.chat.append(roleSystem, "— proposed edit ready · :apply to replace the note · :discard to drop —")
 			m.flash("proposed edit ready — :apply or :discard")
 			return m, nil
+		}
+		if m.overviewMode {
+			m.overviewMode = false
+			m.chat.append(roleSystem, "— overview ready · saving to OVERVIEW —")
+			return m, vOverviewSaveCmd(m.svc, msg.full)
+		}
+		if m.diffMode {
+			m.diffMode = false
+			m.chat.append(roleSystem, "— change explained · saving under diffs/ —")
+			return m, vDiffSaveCmd(m.svc, m.diffRev, msg.full)
 		}
 		if m.explaining {
 			m.explaining = false
@@ -1559,6 +1622,73 @@ func (m VaultModel) cmdExplain(_ string) (tea.Model, tea.Cmd) {
 	m.streamCancel = cancel
 	ch, cmd := startChatStream(ctx, func(ctx context.Context, onDelta func(string)) (string, error) {
 		return svc.ExplainStream(ctx, req, onDelta)
+	})
+	m.streamCh = ch
+	return m, tea.Batch(m.setFocus(paneChat), cmd)
+}
+
+// cmdOverview streams a whole-project architecture overview into the chat; the
+// completed text auto-saves as a top-level OVERVIEW note (see handleStreamChunk).
+func (m VaultModel) cmdOverview() (tea.Model, tea.Cmd) {
+	switch {
+	case m.svc.Offline():
+		m.flash("overview needs an AI provider — run `dcode check`, then :overview")
+		return m, nil
+	case m.streaming:
+		m.flash("busy — try :overview again in a moment")
+		return m, nil
+	}
+
+	m.pending++
+	m.loadKind = "overview"
+	m.streaming = true
+	m.streamStopping = false
+	m.overviewMode = true
+	m.chat.append(roleSystem, "▶ building an architecture overview of "+m.svc.ProjectName()+"…")
+	m.chat.beginStream()
+
+	svc := m.svc
+	ctx, cancel := context.WithCancel(context.Background())
+	m.streamCancel = cancel
+	ch, cmd := startChatStream(ctx, func(ctx context.Context, onDelta func(string)) (string, error) {
+		return svc.OverviewStream(ctx, onDelta)
+	})
+	m.streamCh = ch
+	return m, tea.Batch(m.setFocus(paneChat), cmd)
+}
+
+// cmdDiff streams an explanation of a git diff into the chat; the completed text
+// auto-saves as a change note under diffs/ (see handleStreamChunk). args is the
+// git range — empty for the working changes, else passed to git (e.g. "main").
+func (m VaultModel) cmdDiff(args string) (tea.Model, tea.Cmd) {
+	switch {
+	case m.svc.Offline():
+		m.flash("explaining a diff needs an AI provider — run `dcode check`, then :diff")
+		return m, nil
+	case m.streaming:
+		m.flash("busy — try :diff again in a moment")
+		return m, nil
+	}
+
+	rev := strings.TrimSpace(args)
+	m.pending++
+	m.loadKind = "diff"
+	m.streaming = true
+	m.streamStopping = false
+	m.diffMode = true
+	m.diffRev = rev
+	label := rev
+	if label == "" {
+		label = "working changes"
+	}
+	m.chat.append(roleSystem, "▶ explaining "+label+"…")
+	m.chat.beginStream()
+
+	svc := m.svc
+	ctx, cancel := context.WithCancel(context.Background())
+	m.streamCancel = cancel
+	ch, cmd := startChatStream(ctx, func(ctx context.Context, onDelta func(string)) (string, error) {
+		return svc.DiffStream(ctx, rev, onDelta)
 	})
 	m.streamCh = ch
 	return m, tea.Batch(m.setFocus(paneChat), cmd)
@@ -2218,6 +2348,38 @@ func vSaveCmd(svc *core.Service, path, body string) tea.Cmd {
 			return vErrMsg{kind: "save", err: err}
 		}
 		return vSavedMsg{meta: meta}
+	}
+}
+
+// vOverviewSaveCmd saves a streamed architecture overview as the top-level
+// OVERVIEW note, then opens it.
+func vOverviewSaveCmd(svc *core.Service, text string) tea.Cmd {
+	return func() tea.Msg {
+		meta, err := svc.SaveOverview(text)
+		if err != nil {
+			return vErrMsg{kind: "save overview", err: err}
+		}
+		n, err := svc.OpenNote(meta.Path)
+		if err != nil {
+			return vErrMsg{kind: "open", err: err}
+		}
+		return vOpenedMsg{note: n}
+	}
+}
+
+// vDiffSaveCmd saves a streamed change explanation as a note under diffs/, then
+// opens it.
+func vDiffSaveCmd(svc *core.Service, rev, text string) tea.Cmd {
+	return func() tea.Msg {
+		meta, err := svc.SaveDiffExplanation(rev, text)
+		if err != nil {
+			return vErrMsg{kind: "save diff", err: err}
+		}
+		n, err := svc.OpenNote(meta.Path)
+		if err != nil {
+			return vErrMsg{kind: "open", err: err}
+		}
+		return vOpenedMsg{note: n}
 	}
 }
 

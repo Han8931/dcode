@@ -67,6 +67,31 @@ func TestProjectContextGathersSiblings(t *testing.T) {
 	}
 }
 
+func TestProjectContextPullsReferencedDefinitions(t *testing.T) {
+	s, _, _ := explainService(t, map[string]string{
+		// The target references Widget (defined in another dir) and helper (same dir).
+		"app/main.go": "package app\n\nfunc run() {\n\tw := NewWidget()\n\tw.Render()\n\thelper()\n}\n",
+		"ui/widget.go": "package ui\n\n// Widget is a thing.\ntype Widget struct{ name string }\n\n" +
+			"func NewWidget() *Widget { return &Widget{} }\n\nfunc (w *Widget) Render() {}\n",
+		"app/util.go":  "package app\n\nfunc helper() {}\n",
+		"other/zzz.go": "package other\n\nfunc Unused() {}\n",
+	})
+	ctx := s.projectContext("app/main.go")
+
+	// The cross-dir definition the file references IS pulled in (not just neighbours).
+	if !strings.Contains(ctx, "ui/widget.go (defines") || !strings.Contains(ctx, "type Widget") {
+		t.Fatalf("referenced definition ui/widget.go should be inlined:\n%s", ctx)
+	}
+	// The referenced names are named in the snippet header.
+	if !strings.Contains(ctx, "NewWidget") || !strings.Contains(ctx, "Widget") {
+		t.Fatalf("snippet header should list the referenced symbols:\n%s", ctx)
+	}
+	// An unreferenced file from another dir is NOT inlined.
+	if strings.Contains(ctx, "func Unused") {
+		t.Fatalf("unreferenced cross-dir file should not be inlined:\n%s", ctx)
+	}
+}
+
 func TestExplainStreamOfflineDegrades(t *testing.T) {
 	s, _, _ := explainService(t, map[string]string{"a.go": "package main\nfunc main(){}\n"})
 	var got strings.Builder

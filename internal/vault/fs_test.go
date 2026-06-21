@@ -73,6 +73,40 @@ func TestDeleteRenameMakeDir(t *testing.T) {
 	}
 }
 
+func TestReadOpsRejectEscapingPaths(t *testing.T) {
+	// A real file living OUTSIDE the vault root, reachable only via traversal.
+	base := t.TempDir()
+	secret := filepath.Join(base, "secret.txt")
+	mustWriteFile(t, secret, "top secret\n")
+
+	root := filepath.Join(base, "vault")
+	v, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, bad := range []string{"", ".", "..", "../secret.txt", "/etc/passwd", "a/../../secret.txt"} {
+		if v.Has(bad) {
+			t.Errorf("Has(%q) should be false", bad)
+		}
+		if v.Exists(bad) {
+			t.Errorf("Exists(%q) should be false", bad)
+		}
+		if _, err := v.Read(bad); err == nil {
+			t.Errorf("Read(%q) should be rejected", bad)
+		}
+		if _, err := v.ReadSource(bad); err == nil {
+			t.Errorf("ReadSource(%q) should be rejected", bad)
+		}
+	}
+
+	// Sanity: the escaping path really does resolve to the secret file, so the
+	// rejections above are doing the protecting (not just hitting a missing file).
+	if _, err := os.Stat(filepath.Join(root, "..", "secret.txt")); err != nil {
+		t.Fatalf("test setup: secret should be reachable via traversal: %v", err)
+	}
+}
+
 func TestFileOpsRejectEscapingPaths(t *testing.T) {
 	v, err := Open(t.TempDir())
 	if err != nil {
