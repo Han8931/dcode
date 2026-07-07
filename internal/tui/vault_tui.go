@@ -1,10 +1,10 @@
 package tui
 
-// vault_tui.go is the terminal front-end for the general learning vault. Like the
-// web GUI, it is a thin presentation layer over core.Service: a three-pane
-// program (notes | editor | chat/study) where all real work — listing notes,
-// opening/saving them, generating a lesson, grading an essay, chatting — is done
-// by core and this model only renders the result. It reuses the existing
+// vault_tui.go is the terminal front-end for the code-decoding workspace. Like
+// the web GUI, it is a thin presentation layer over core.Service: a three-pane
+// program (files | editor | chat) where all real work — listing files and notes,
+// opening/saving notes, explaining code, polishing notes, chatting — is done by
+// core and this model only renders the result. It reuses the existing
 // sidebar/chat/editor components and styles from this package.
 
 import (
@@ -78,10 +78,10 @@ type VaultModel struct {
 	current      string // path of the open note ("" = none)
 	currentTitle string
 	curPath      *string          // shared with the editor save closure
-	chatHist     []tutor.ChatTurn // tutor conversation history
+	chatHist     []tutor.ChatTurn // assistant conversation history
 
-	// Per-note chat contexts: each note keeps its own transcript and tutor
-	// conversation, restored when the learner reopens it.
+	// Per-note chat contexts: each note keeps its own transcript and assistant
+	// conversation, restored when the user reopens it.
 	chatByNote map[string][]chatBlock
 	histByNote map[string][]tutor.ChatTurn
 
@@ -95,7 +95,7 @@ type VaultModel struct {
 	// chat (polishing == true for that stream); the result is held in
 	// pendingEdit until :apply writes it back to the note (or :discard drops
 	// it). pendingEditPath records which note the proposal is for, so :apply
-	// is a no-op if the learner switched notes meanwhile. When the edit was
+	// is a no-op if the user switched notes meanwhile. When the edit was
 	// scoped to a Visual selection, pendingSel holds that span so :apply
 	// replaces just it (verifying the span is unchanged); nil = whole note.
 	polishing       bool
@@ -107,8 +107,8 @@ type VaultModel struct {
 	// the duration of one dispatch; nil outside that window.
 	cmdSel *editor.Selection
 
-	// focusExcerpt is a selected passage the learner is discussing with the
-	// tutor (:ask): while set, chatContext grounds replies on it. It persists
+	// focusExcerpt is a selected passage the user is discussing with the
+	// assistant (:ask): while set, chatContext grounds replies on it. It persists
 	// across follow-up questions and clears when another note is opened.
 	focusExcerpt string
 
@@ -128,6 +128,21 @@ type VaultModel struct {
 	finderInput   textinput.Model
 	finderCursor  int
 	finderResults []finderResult
+
+	// Help, command palette, and chat action modals. helpMode is a read-only keymap
+	// overlay; paletteMode fuzzy-finds ex commands; actionMode picks common actions
+	// for the latest chat/AI output.
+	helpMode       bool
+	paletteMode    bool
+	paletteInput   textinput.Model
+	paletteCursor  int
+	paletteResults []commandSpec
+	actionMode     bool
+	actionCursor   int
+
+	// Selection metadata for the last :explain/:decode run, used in the chat
+	// header and in the saved companion note provenance.
+	lastExplainRange string
 
 	// Open-project picker modal (",o" / ":open"). pickerMode is true while it is
 	// open; it lists recently opened projects and lets the user type a new path.
@@ -236,6 +251,10 @@ func newVaultModel(svc *core.Service, cfg config.Config) VaultModel {
 	fi.Prompt = "› "
 	m.finderInput = fi
 
+	pa := textinput.New()
+	pa.Prompt = "› "
+	m.paletteInput = pa
+
 	pi := textinput.New()
 	pi.Prompt = "› "
 	pi.Placeholder = "~/code/some-project"
@@ -301,7 +320,7 @@ func (m VaultModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.SetLanguage(langForPath(msg.note.Path, m.readOnly))
 		m.editor.SetValue(msg.note.Body)
 		m.backlinks = nil         // drop the previous note's backlinks until the fetch returns
-		m.expandTo(msg.note.Path) // unfold to a note opened indirectly (:learn, :new)
+		m.expandTo(msg.note.Path) // unfold to a note opened indirectly (:new)
 		m.rebuildSidebar()
 		return m, tea.Batch(m.setFocus(paneEditor), vBacklinksCmd(m.svc, m.current))
 
@@ -355,11 +374,6 @@ func (m VaultModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case vGeneratedMsg:
-		m.pending--
-		m.chat.append(roleLesson, "Created note: "+msg.meta.Title)
-		return m, tea.Batch(vListCmd(m.svc), vOpenCmd(m.svc, msg.meta.Path))
-
 	case vExplanationSavedMsg:
 		m.chat.append(roleOK, "✓ saved explanation → "+msg.meta.Path)
 		m.flash("saved " + msg.meta.Path)
@@ -409,6 +423,15 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyEsc && m.streaming {
 		return m.stopStream()
 	}
+	if m.helpMode {
+		return m.updateHelp(msg)
+	}
+	if m.paletteMode {
+		return m.updatePalette(msg)
+	}
+	if m.actionMode {
+		return m.updateActions(msg)
+	}
 	if m.finderMode != "" {
 		return m.updateFinder(msg)
 	}
@@ -440,6 +463,8 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// for the panes (e.g. indenting in the editor).
 		m.pendingWindow = true
 		return m, nil
+	case "?":
+		return m.openHelp()
 	}
 
 	// A leader chord lives for exactly one keystroke: clear it here so a stray
@@ -466,6 +491,9 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// it must work on a fresh vault where focus starts on the sidebar.
 	if leader && msg.String() == "o" {
 		return m.openProjectPicker()
+	}
+	if leader && msg.String() == "," {
+		return m.openPalette()
 	}
 
 	switch m.focus {
@@ -611,7 +639,7 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case paneChat:
 		switch msg.String() {
-		// Copy the tutor's last reply: Alt+O (Linux) / Option+O (macOS, which
+		// Copy the assistant's last reply: Alt+O (Linux) / Option+O (macOS, which
 		// arrives as "ø"/"Ø" unless the terminal sends Option as Meta).
 		case "alt+o", "ø", "Ø":
 			m.flash(copyChat(&m.chat, ""))
@@ -626,6 +654,8 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "alt+v", "√":
 			m.flash(pasteChat(&m.chat))
 			return m, nil
+		case "alt+a", "å", "Å":
+			return m.openActions()
 		}
 		// The leader chords work from the chat's Vim Normal mode too (never
 		// from Insert, where "," must type a comma).
@@ -839,6 +869,166 @@ func (m *VaultModel) closeCmdLine() {
 	m.cmdLine.Prompt = ":"
 	m.promptMode = ""
 	m.promptOld = ""
+}
+
+func (m VaultModel) openHelp() (tea.Model, tea.Cmd) {
+	m.helpMode = true
+	return m, nil
+}
+
+func (m VaultModel) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyEnter:
+		m.helpMode = false
+		return m, nil
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	}
+	if msg.String() == "?" || msg.String() == "q" {
+		m.helpMode = false
+	}
+	return m, nil
+}
+
+func (m VaultModel) openPalette() (tea.Model, tea.Cmd) {
+	m.paletteMode = true
+	m.paletteCursor = 0
+	m.paletteInput.SetValue("")
+	m.paletteInput.CursorEnd()
+	m.paletteInput.Focus()
+	m.refreshPaletteResults()
+	return m, nil
+}
+
+func (m VaultModel) updatePalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.paletteMode = false
+		m.paletteInput.Blur()
+		return m, nil
+	case tea.KeyEnter:
+		if len(m.paletteResults) == 0 {
+			return m, nil
+		}
+		if m.paletteCursor < 0 || m.paletteCursor >= len(m.paletteResults) {
+			m.paletteCursor = 0
+		}
+		cmdName := m.paletteResults[m.paletteCursor].Name
+		m.paletteMode = false
+		m.paletteInput.Blur()
+		return m.runEx(cmdName)
+	case tea.KeyUp:
+		if m.paletteCursor > 0 {
+			m.paletteCursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if m.paletteCursor < len(m.paletteResults)-1 {
+			m.paletteCursor++
+		}
+		return m, nil
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	}
+	var cmd tea.Cmd
+	m.paletteInput, cmd = m.paletteInput.Update(msg)
+	m.refreshPaletteResults()
+	m.paletteCursor = 0
+	return m, cmd
+}
+
+func (m *VaultModel) refreshPaletteResults() {
+	q := strings.TrimSpace(m.paletteInput.Value())
+	m.paletteResults = m.paletteResults[:0]
+	for _, c := range vaultCommandSpecs {
+		if q == "" {
+			m.paletteResults = append(m.paletteResults, c)
+			continue
+		}
+		if _, ok := fuzzyScore(q, c.Name+" "+c.Desc); ok {
+			m.paletteResults = append(m.paletteResults, c)
+		}
+	}
+	if len(m.paletteResults) > 40 {
+		m.paletteResults = m.paletteResults[:40]
+	}
+	if m.paletteCursor >= len(m.paletteResults) {
+		m.paletteCursor = clampMin(len(m.paletteResults)-1, 0)
+	}
+}
+
+func (m VaultModel) openActions() (tea.Model, tea.Cmd) {
+	m.actionMode = true
+	m.actionCursor = 0
+	return m, nil
+}
+
+func (m VaultModel) updateActions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	actions := m.chatActions()
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.actionMode = false
+		return m, nil
+	case tea.KeyEnter:
+		if len(actions) == 0 {
+			m.actionMode = false
+			return m, nil
+		}
+		if m.actionCursor < 0 || m.actionCursor >= len(actions) {
+			m.actionCursor = 0
+		}
+		name := actions[m.actionCursor].Name
+		m.actionMode = false
+		return m.runChatAction(name)
+	case tea.KeyUp:
+		if m.actionCursor > 0 {
+			m.actionCursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if m.actionCursor < len(actions)-1 {
+			m.actionCursor++
+		}
+		return m, nil
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	}
+	if msg.String() == "q" {
+		m.actionMode = false
+	}
+	return m, nil
+}
+
+func (m VaultModel) chatActions() []commandSpec {
+	return []commandSpec{
+		{"copy", "copy latest assistant reply"},
+		{"note", "save last explanation as a companion note"},
+		{"export", "export this chat transcript"},
+		{"paste", "paste clipboard into chat input"},
+		{"ask", "focus the chat input for a follow-up"},
+		{"discard", "discard pending AI edit"},
+	}
+}
+
+func (m VaultModel) runChatAction(name string) (tea.Model, tea.Cmd) {
+	switch name {
+	case "copy":
+		m.flash(copyChat(&m.chat, ""))
+		return m, nil
+	case "note":
+		return m.cmdSaveExplanation()
+	case "export":
+		m.flash(exportChat(&m.chat, m.cfg.ExportsDir, m.currentTitle))
+		return m, nil
+	case "paste":
+		m.flash(pasteChat(&m.chat))
+		return m, m.setFocus(paneChat)
+	case "ask":
+		return m, m.setFocus(paneChat)
+	case "discard":
+		return m.cmdDiscardEdit()
+	}
+	return m, nil
 }
 
 func (m VaultModel) openFinder(mode string) (tea.Model, tea.Cmd) {
@@ -1122,7 +1312,7 @@ func (m *VaultModel) resetForProject() {
 	m.chatByNote = map[string][]chatBlock{}
 	m.histByNote = map[string][]tutor.ChatTurn{}
 	m.chatHist = nil
-	m.lastExplain, m.lastExplainPath = "", ""
+	m.lastExplain, m.lastExplainPath, m.lastExplainRange = "", "", ""
 	m.pendingEdit, m.pendingEditPath, m.pendingSel = "", "", nil
 	m.focusExcerpt = ""
 	m.confirmDel = nil
@@ -1201,14 +1391,55 @@ func (m VaultModel) confirmDelete(it sidebarItem) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// vaultExCmds lists every command runEx accepts (aliases included), sorted,
-// for Tab completion in the command prompt.
-var vaultExCmds = []string{
-	"apply", "ask", "backlinks", "compact", "copy", "decode", "diff", "discard",
-	"discuss", "edit", "explain", "export", "fold", "gen", "learn", "lesson", "links",
-	"new", "note", "open", "overview", "paste", "polish", "q", "quit", "sidebar",
-	"submit", "w", "wide", "wq", "write", "yank",
+// vaultExCmds lists every command runEx accepts (aliases included) for Tab
+// completion in the command prompt.
+type commandSpec struct {
+	Name string
+	Desc string
 }
+
+var vaultCommandSpecs = []commandSpec{
+	{"apply", "apply the pending AI edit"},
+	{"ask", "ask about the open file or Visual selection"},
+	{"actions", "open chat actions menu"},
+	{"backlinks", "toggle linked-mentions footer"},
+	{"commands", "open command palette"},
+	{"compact", "give more width to chat"},
+	{"copy", "copy last assistant reply"},
+	{"decode", "explain open file or Visual selection"},
+	{"diff", "explain git diff; optional rev/range"},
+	{"discard", "discard pending AI edit"},
+	{"discuss", "alias for :ask"},
+	{"edit", "AI-edit note/selection with instruction"},
+	{"explain", "explain open file or Visual selection"},
+	{"export", "export chat transcript"},
+	{"fold", "toggle sidebar"},
+	{"help", "show keymap and commands"},
+	{"links", "alias for :backlinks"},
+	{"new", "create a markdown note"},
+	{"note", "save last explanation as a companion note"},
+	{"open", "open project picker or path"},
+	{"overview", "generate project architecture overview"},
+	{"paste", "paste clipboard into chat input"},
+	{"polish", "copy-edit note/selection with AI"},
+	{"q", "quit"},
+	{"quit", "quit"},
+	{"sidebar", "alias for :fold"},
+	{"submit", "save and submit note"},
+	{"w", "save note"},
+	{"wide", "give more width to editor"},
+	{"wq", "save and quit-ish submit"},
+	{"write", "save note"},
+	{"yank", "alias for :copy"},
+}
+
+var vaultExCmds = func() []string {
+	out := make([]string, len(vaultCommandSpecs))
+	for i, c := range vaultCommandSpecs {
+		out[i] = c.Name
+	}
+	return out
+}()
 
 // runEx dispatches a vault ex-command (without the leading colon).
 func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
@@ -1219,14 +1450,8 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 	args := strings.TrimSpace(strings.TrimPrefix(raw, fields[0]))
 	switch fields[0] {
 	case "learn", "gen", "lesson":
-		if args == "" {
-			m.flash("usage: :learn <what you want to learn>")
-			return m, nil
-		}
-		m.pending++
-		m.loadKind = "generating lesson"
-		m.chat.append(roleSystem, "▶ generating a lesson on "+args+"…")
-		return m, vGenCmd(m.svc, args)
+		m.flash(":" + fields[0] + " was removed — use :new for notes or :explain/:ask for code help")
+		return m, nil
 	case "new":
 		if args == "" {
 			m.flash("usage: :new <note title>")
@@ -1234,6 +1459,12 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		}
 		path := args + ".md"
 		return m, vSaveOpenCmd(m.svc, path, "# "+args+"\n\n")
+	case "help":
+		return m.openHelp()
+	case "commands":
+		return m.openPalette()
+	case "actions":
+		return m.openActions()
 	case "open":
 		if args == "" {
 			return m.openProjectPicker() // ":open" alone opens the picker
@@ -1378,8 +1609,8 @@ func (m *VaultModel) flash(s string) {
 }
 
 // switchNoteChat swaps the chat pane to the opened note's own transcript and
-// tutor conversation, saving the outgoing note's first. Reopening a note brings
-// its past study activity back; a first visit starts a clean pane with a header.
+// assistant conversation, saving the outgoing note's first. Reopening a note brings
+// its past chat activity back; a first visit starts a clean pane with a header.
 func (m *VaultModel) switchNoteChat(n core.Note) {
 	if n.Path == m.current {
 		return
@@ -1396,30 +1627,30 @@ func (m *VaultModel) switchNoteChat(n core.Note) {
 	}
 }
 
-// chatContext describes what the learner is looking at — the open note or file —
+// chatContext describes what the user is looking at — the open note or file —
 // so chat replies stay grounded in the current material.
 func (m VaultModel) chatContext() string {
 	var b strings.Builder
 	// Lead with the focused excerpt (the subject of a :ask/:discuss thread) so
 	// it ALWAYS survives context clamping — the note body that follows may be
-	// trimmed, but the excerpt the learner is asking about must not be.
+	// trimmed, but the excerpt the user is asking about must not be.
 	if m.focusExcerpt != "" {
-		b.WriteString("The learner has SELECTED this excerpt and wants the whole conversation " +
+		b.WriteString("The user has SELECTED this excerpt and wants the whole conversation " +
 			"focused on it. Keep grounding every reply in it:\n```\n" + m.focusExcerpt + "\n```\n\n")
 	}
 	if m.current == "" {
 		return strings.TrimSpace(b.String())
 	}
 	b.WriteString("Current note — " + m.currentTitle + "\n")
-	b.WriteString("\nNote content (as in the learner's editor):\n" + m.editor.Value())
+	b.WriteString("\nNote content (as in the user's editor):\n" + m.editor.Value())
 	return strings.TrimSpace(b.String())
 }
 
-// submitChat sends the chat input to the tutor, streaming the reply into the
+// submitChat sends the chat input to the assistant, streaming the reply into the
 // transcript, grounded in the open file or note.
 func (m VaultModel) submitChat() (tea.Model, tea.Cmd) {
 	if m.streaming {
-		m.flash("the tutor is still replying — one question at a time")
+		m.flash("the assistant is still replying — one question at a time")
 		return m, nil
 	}
 	text, ok := m.chat.submit()
@@ -1431,16 +1662,16 @@ func (m VaultModel) submitChat() (tea.Model, tea.Cmd) {
 	return m.streamReply()
 }
 
-// cmdAsk routes a selected passage into the chat to discuss it with the tutor.
+// cmdAsk routes a selected passage into the chat to discuss it with the assistant.
 // From the editor's Visual mode, ":ask" (or ":discuss") grounds the
 // conversation on the selection — it stays the topic across follow-ups until
 // another note is opened. With a trailing question (":ask why is this vague?")
 // the question is sent right away; without one, focus moves to the chat input
-// so the learner can type. Polishing it instead is just :polish/:edit on the
+// so the user can type. Polishing it instead is just :polish/:edit on the
 // same selection.
 func (m VaultModel) cmdAsk(question string) (tea.Model, tea.Cmd) {
 	if m.streaming {
-		m.flash("the tutor is still replying — try again in a moment")
+		m.flash("the assistant is still replying — try again in a moment")
 		return m, nil
 	}
 	question = strings.TrimSpace(question)
@@ -1456,7 +1687,7 @@ func (m VaultModel) cmdAsk(question string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if question == "" {
-		return m, m.setFocus(paneChat) // let the learner type their question
+		return m, m.setFocus(paneChat) // let the user type their question
 	}
 	m.chat.append(roleUser, question)
 	m.chatHist = append(m.chatHist, tutor.ChatTurn{Role: "user", Content: question})
@@ -1481,7 +1712,7 @@ func groundHistory(hist []tutor.ChatTurn, excerpt string) []tutor.ChatTurn {
 	return out
 }
 
-// streamReply starts streaming one note-grounded tutor reply over the active
+// streamReply starts streaming one note-grounded assistant reply over the active
 // conversation.
 func (m VaultModel) streamReply() (tea.Model, tea.Cmd) {
 	m.pending++
@@ -1515,7 +1746,7 @@ func (m VaultModel) stopStream() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleStreamChunk advances a streaming tutor reply.
+// handleStreamChunk advances a streaming assistant reply.
 func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 	if m.streamStopping {
 		if msg.done || msg.err != nil {
@@ -1603,9 +1834,11 @@ func (m VaultModel) cmdExplain(_ string) (tea.Model, tea.Cmd) {
 
 	req := core.ExplainRequest{Path: m.current, Lang: langForPath(m.current, m.readOnly)}
 	target := "file"
+	rangeLabel := ""
 	if m.cmdSel != nil && strings.TrimSpace(m.cmdSel.Text) != "" {
 		req.Selection = m.cmdSel.Text
 		target = "selection"
+		rangeLabel = selectionLineRange(m.editor.Value(), *m.cmdSel)
 	}
 
 	m.pending++
@@ -1614,7 +1847,12 @@ func (m VaultModel) cmdExplain(_ string) (tea.Model, tea.Cmd) {
 	m.streamStopping = false
 	m.explaining = true
 	m.lastExplainPath = m.current
-	m.chat.append(roleSystem, "▶ decoding the "+target+" — "+m.currentTitle)
+	m.lastExplainRange = rangeLabel
+	header := "▶ decoding the " + target + " — " + m.currentTitle
+	if rangeLabel != "" {
+		header += " · " + rangeLabel
+	}
+	m.chat.append(roleSystem, header)
 	m.chat.beginStream()
 
 	svc := m.svc
@@ -1701,7 +1939,7 @@ func (m VaultModel) cmdSaveExplanation() (tea.Model, tea.Cmd) {
 		m.flash("nothing to save yet — :explain a file first, then :note")
 		return m, nil
 	}
-	return m, vSaveExplanationCmd(m.svc, m.lastExplainPath, m.lastExplain)
+	return m, vSaveExplanationCmd(m.svc, m.lastExplainPath, m.lastExplainRange, m.lastExplain)
 }
 
 // --- :polish / :edit — AI note editing ---
@@ -1709,7 +1947,7 @@ func (m VaultModel) cmdSaveExplanation() (tea.Model, tea.Cmd) {
 // cmdPolish streams an AI rewrite of the open note into the chat for review.
 // instruction is free-form (":edit make this concise") or empty (":polish",
 // which uses core.DefaultPolishInstruction). The result waits in pendingEdit
-// until :apply writes it back, so nothing is changed until the learner agrees.
+// until :apply writes it back, so nothing is changed until the user agrees.
 func (m VaultModel) cmdPolish(instruction string) (tea.Model, tea.Cmd) {
 	switch {
 	case m.current == "":
@@ -1903,7 +2141,7 @@ const vaultRootID = ""
 
 // vaultRootLabel is the display name of the vault-root sidebar row. It is a
 // fixed generic label on purpose — NOT the configured directory's base name —
-// so the learner's real (possibly personal) vault path never shows on screen.
+// so the user's real (possibly personal) vault path never shows on screen.
 const vaultRootLabel = "vault"
 
 // expandTo unfolds every ancestor directory of relPath so its row is visible
@@ -1947,6 +2185,7 @@ func (m *VaultModel) layout() {
 
 	m.sidebar.setSize(m.sidebarW, m.contentH)
 	m.finderInput.Width = max(20, m.width-18)
+	m.paletteInput.Width = max(20, m.width-18)
 	reserved := 1 + len(m.backlinkFooterLines(m.editorW))
 	m.editor.SetSize(m.editorW, max(1, m.contentH-reserved))
 	m.chat.setSize(m.chatW, m.contentH)
@@ -1970,6 +2209,15 @@ func (m VaultModel) View() string {
 	}
 	frame := lipgloss.JoinVertical(lipgloss.Left, m.titleView(), row, m.statusView())
 	frame = lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(frame)
+	if m.helpMode {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.helpView())
+	}
+	if m.paletteMode {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.paletteView())
+	}
+	if m.actionMode {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.actionsView())
+	}
 	if m.finderMode != "" {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.finderView())
 	}
@@ -1984,6 +2232,15 @@ func (m VaultModel) box(p pane, w, h int, content string) string {
 		Width(w).Height(h).
 		MaxWidth(w + 2).MaxHeight(h + 2).
 		Render(content)
+}
+
+func modalBox(w int, body string) string {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 2).
+		Width(w).
+		Render(body)
 }
 
 func (m VaultModel) editorPaneView(w int) string {
@@ -2004,6 +2261,81 @@ func (m VaultModel) editorPaneView(w int) string {
 		out += "\n" + ln
 	}
 	return out
+}
+
+func (m VaultModel) helpView() string {
+	w := clampRange(m.width-10, 48, 96)
+	var b strings.Builder
+	b.WriteString(titleBar.Render(" Help "))
+	b.WriteString("\n\n")
+	sections := []struct{ title, body string }{
+		{"Navigation", "Ctrl-W h/l focus panes · mouse click focuses · ? help · Ctrl-C quit"},
+		{"Files", "j/k move · Enter open/fold · Space mark · m node ops · r refresh · ,o open project"},
+		{"Find", ",ff find files · ,fg search contents · ,, command palette"},
+		{"Decode", ":explain/:decode open file or Visual selection · Visual ,d decode lines · :note save explanation"},
+		{"Chat", "Enter send · :ask discuss selection · Alt-A actions · Alt-O copy reply · Alt-V paste · Esc stop stream"},
+		{"AI edit", ":polish copy-edit · :edit <instruction> · :apply accept · :discard drop"},
+		{"Layout", ":fold sidebar · :wide grow editor · :compact grow chat · :backlinks toggle links"},
+	}
+	for _, s := range sections {
+		b.WriteString(bold(s.title) + "\n")
+		b.WriteString("  " + s.body + "\n\n")
+	}
+	b.WriteString(hintStyle.Render("Esc/q/? close"))
+	return modalBox(w, b.String())
+}
+
+func (m VaultModel) paletteView() string {
+	w := clampRange(m.width-10, 44, 92)
+	inner := clampMin(w-6, 12)
+	maxRows := min(len(m.paletteResults), 12)
+	var b strings.Builder
+	b.WriteString(titleBar.Render(" Command palette "))
+	b.WriteString("\n\n")
+	b.WriteString(m.paletteInput.View())
+	b.WriteString("\n\n")
+	if len(m.paletteResults) == 0 {
+		b.WriteString(hintStyle.Render("no matching commands"))
+	} else {
+		for i := 0; i < maxRows; i++ {
+			c := m.paletteResults[i]
+			label := truncate(":"+c.Name+"  "+c.Desc, inner-2)
+			if i == m.paletteCursor {
+				b.WriteString(selectedRow.Width(inner).Render("▸ " + label))
+			} else {
+				b.WriteString("  " + label)
+			}
+			if i < maxRows-1 {
+				b.WriteString("\n")
+			}
+		}
+	}
+	b.WriteString("\n\n")
+	b.WriteString(hintStyle.Render(",, · type to filter · enter run · esc close"))
+	return modalBox(w, b.String())
+}
+
+func (m VaultModel) actionsView() string {
+	w := clampRange(m.width-10, 44, 78)
+	inner := clampMin(w-6, 12)
+	actions := m.chatActions()
+	var b strings.Builder
+	b.WriteString(titleBar.Render(" Chat actions "))
+	b.WriteString("\n\n")
+	for i, a := range actions {
+		label := truncate(a.Name+" — "+a.Desc, inner-2)
+		if i == m.actionCursor {
+			b.WriteString(selectedRow.Width(inner).Render("▸ " + label))
+		} else {
+			b.WriteString("  " + label)
+		}
+		if i < len(actions)-1 {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n\n")
+	b.WriteString(hintStyle.Render("Alt-A/:actions · ↑↓ choose · enter run · esc close"))
+	return modalBox(w, b.String())
 }
 
 func (m VaultModel) finderView() string {
@@ -2171,7 +2503,7 @@ func (m VaultModel) statusView() string {
 	if m.notice != "" && time.Since(m.noticeAt) < noticeTTL {
 		return statusBar.Width(m.width).Render(left + "   " + noticeStyle.Render(m.notice))
 	}
-	hints := "⌃w h·l focus · : cmds · :learn <topic> · enter open · ⌃s save · ⌃c quit"
+	hints := "? help · ,, commands · ⌃w h·l focus · :explain · :ask · enter open · ⌃c quit"
 	switch {
 	case m.pendingEdit != "":
 		hints = noticeStyle.Render("proposed edit") + " · :apply to use it · :discard to drop it"
@@ -2184,7 +2516,7 @@ func (m VaultModel) statusView() string {
 	case m.focus == paneEditor:
 		hints = ":explain · :polish/:edit AI edit · select+:ask discuss · ,ff find · ⌃s save"
 	case m.focus == paneChat:
-		hints = "enter send · drag to copy · ⌥o/:copy copy reply · ⌃f/⌃b scroll"
+		hints = "enter send · Alt-A actions · drag copy · ⌥o/:copy copy reply · ⌃f/⌃b scroll"
 	}
 	return statusBar.Width(m.width).Render(left + "   " + hintStyle.Render(hints))
 }
@@ -2201,7 +2533,44 @@ func (m VaultModel) focusName() string {
 	return ""
 }
 
-// vChatTurn builds a one-element tutor history slice (test/readability helper).
+func selectionLineRange(body string, sel editor.Selection) string {
+	start, cut := sel.Start, sel.Cut
+	if start > cut {
+		start, cut = cut, start
+	}
+	r := []rune(body)
+	if start < 0 {
+		start = 0
+	}
+	if cut < start {
+		cut = start
+	}
+	if start > len(r) {
+		start = len(r)
+	}
+	if cut > len(r) {
+		cut = len(r)
+	}
+	lineOf := func(pos int) int {
+		line := 1
+		for i := 0; i < pos && i < len(r); i++ {
+			if r[i] == '\n' {
+				line++
+			}
+		}
+		return line
+	}
+	lo, hi := lineOf(start), lineOf(cut)
+	if cut > start && cut <= len(r) && r[cut-1] == '\n' && hi > lo {
+		hi-- // a linewise Visual selection ending at column 0 shouldn't count next line
+	}
+	if lo == hi {
+		return "line " + itoa(lo)
+	}
+	return "lines " + itoa(lo) + "-" + itoa(hi)
+}
+
+// vChatTurn builds a one-element assistant history slice (test/readability helper).
 func vChatTurn(role, content string) []tutor.ChatTurn {
 	return []tutor.ChatTurn{{Role: role, Content: content}}
 }
@@ -2245,7 +2614,6 @@ type (
 	vDeletedMsg          struct{ paths []string }
 	vRenamedMsg          struct{ oldPath, newPath string }
 	vMkdirMsg            struct{ path string }
-	vGeneratedMsg        struct{ meta core.NoteMeta }
 	vExplanationSavedMsg struct{ meta core.NoteMeta }
 	vSavedMsg            struct{ meta core.NoteMeta }
 	vErrMsg              struct {
@@ -2321,19 +2689,9 @@ func vBacklinksCmd(svc *core.Service, path string) tea.Cmd {
 	}
 }
 
-func vGenCmd(svc *core.Service, request string) tea.Cmd {
+func vSaveExplanationCmd(svc *core.Service, srcPath, loc, explanation string) tea.Cmd {
 	return func() tea.Msg {
-		meta, err := svc.GenerateLesson(context.Background(), request)
-		if err != nil {
-			return vErrMsg{kind: "generate", err: err}
-		}
-		return vGeneratedMsg{meta: meta}
-	}
-}
-
-func vSaveExplanationCmd(svc *core.Service, srcPath, explanation string) tea.Cmd {
-	return func() tea.Msg {
-		meta, err := svc.SaveExplanation(srcPath, explanation)
+		meta, err := svc.SaveExplanationAt(srcPath, loc, explanation)
 		if err != nil {
 			return vErrMsg{kind: "save explanation", err: err}
 		}

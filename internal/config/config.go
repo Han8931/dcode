@@ -59,7 +59,7 @@ type AIConfig struct {
 	// env var on shared machines — config files are easy to leak.
 	APIKey string `toml:"api_key"`
 	// TimeoutSeconds bounds each model request. 0 means the default (120s —
-	// local models can be slow to load and generate long lessons).
+	// local models can be slow to load and generate long replies).
 	TimeoutSeconds int `toml:"timeout_seconds"`
 }
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"dcode/internal/tutor"
@@ -24,8 +25,42 @@ Reference real file names and symbols from the diff. Markdown. Do NOT invent
 changes that are not present in the diff.`
 
 // maxDiffChars bounds the diff sent to the model so a sprawling change still
-// fits a small model's context window.
-const maxDiffChars = 24000
+// fits a small model's context window. maxDiffMapChars bounds the structural
+// map prepended before it — kept compact, since the diff itself is the star.
+const (
+	maxDiffChars    = 24000
+	maxDiffMapChars = 4000
+)
+
+// diffFileRE pulls the changed file paths out of a unified diff's "diff --git
+// a/… b/…" headers; the "b/" path is the post-change name.
+var diffFileRE = regexp.MustCompile(`(?m)^diff --git a/\S+ b/(\S+)`)
+
+// changedPaths returns the set of files a unified diff touches.
+func changedPaths(diff string) map[string]bool {
+	set := map[string]bool{}
+	for _, m := range diffFileRE.FindAllStringSubmatch(diff, -1) {
+		set[m[1]] = true
+	}
+	return set
+}
+
+// diffContext builds a focused structural map for a diff: the signatures of the
+// changed files plus every file that references a symbol they define — the
+// change's structural neighbourhood — so the model can judge WHAT changed
+// against how the code is actually wired, not the diff text alone. "" when there
+// is nothing to add (no changed source files, or the tree can't be listed).
+func (s *Service) diffContext(changed map[string]bool) string {
+	if len(changed) == 0 {
+		return ""
+	}
+	files, err := s.code.List()
+	if err != nil {
+		return ""
+	}
+	m := buildRepoMap(files)
+	return clampChars(renderRepoMap(m, focusFiles(m, files, changed), maxDiffMapChars), maxDiffMapChars)
+}
 
 // gitDiff runs `git diff <args>` in the project root and returns its output.
 // A non-zero exit (not a git repo, bad revision) is surfaced with git's message.
@@ -66,8 +101,15 @@ func (s *Service) DiffStream(ctx context.Context, rev string, onDelta func(strin
 	if strings.TrimSpace(diff) == "" {
 		return "", fmt.Errorf("no changes to explain (git diff %s was empty)", strings.Join(args, " "))
 	}
+	mapCtx := s.diffContext(changedPaths(diff))
 	diff = clampChars(diff, maxDiffChars)
-	hist := []tutor.ChatTurn{{Role: "user", Content: "Explain this git diff:\n\n```diff\n" + diff + "\n```"}}
+	user := "Explain this git diff:\n\n```diff\n" + diff + "\n```"
+	if mapCtx != "" {
+		user = "Repository map — structural context for the changed code " +
+			"(signatures of the changed files and the files that reference them):\n\n" +
+			mapCtx + "\n\n" + user
+	}
+	hist := []tutor.ChatTurn{{Role: "user", Content: user}}
 	return s.tutor.StreamConversation(ctx, diffSystemPrompt, hist, onDelta)
 }
 

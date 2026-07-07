@@ -13,7 +13,7 @@ import (
 )
 
 // testService builds a Service over a temp source root + temp notes root and an
-// offline tutor. Notes (the writable root) is where .md content created in tests
+// offline AI client. Notes (the writable root) is where .md content created in tests
 // lands; the source root starts empty.
 func testService(t *testing.T) *core.Service {
 	t.Helper()
@@ -27,7 +27,7 @@ func testService(t *testing.T) *core.Service {
 	}
 	tut := tutor.New(config.AIConfig{Provider: "openai"}) // offline (no key)
 	if !tut.Offline() {
-		t.Fatal("expected offline tutor")
+		t.Fatal("expected offline AI client")
 	}
 	return core.New(code, notes, tut)
 }
@@ -37,43 +37,6 @@ func newTestVaultModel(t *testing.T) VaultModel {
 	m := newVaultModel(testService(t), config.Config{})
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	return tm.(VaultModel)
-}
-
-func TestVaultGenerateAndOpen(t *testing.T) {
-	m := newTestVaultModel(t)
-
-	// :learn generates a lesson note (offline placeholder).
-	tm, cmd := m.runEx("learn the cold war")
-	m = tm.(VaultModel)
-	if cmd == nil {
-		t.Fatal("expected a generate command")
-	}
-	gen, ok := cmd().(vGeneratedMsg)
-	if !ok {
-		t.Fatalf("expected vGeneratedMsg, got %T", cmd())
-	}
-	if gen.meta.Path == "" {
-		t.Fatal("generated note has no path")
-	}
-	tm, _ = m.Update(gen)
-	m = tm.(VaultModel)
-	if m.pending != 0 {
-		t.Fatalf("pending should be back to 0, got %d", m.pending)
-	}
-
-	// Open the generated note and confirm it loads into the editor.
-	opened := vOpenCmd(m.svc, gen.meta.Path)().(vOpenedMsg)
-	tm, _ = m.Update(opened)
-	m = tm.(VaultModel)
-	if m.current != gen.meta.Path {
-		t.Fatalf("current = %q, want %q", m.current, gen.meta.Path)
-	}
-	if strings.TrimSpace(m.editor.Value()) == "" {
-		t.Fatal("editor should hold the note body")
-	}
-	if m.focus != paneEditor {
-		t.Fatal("opening a note should focus the editor")
-	}
 }
 
 func TestVaultNewNote(t *testing.T) {
@@ -88,6 +51,32 @@ func TestVaultNewNote(t *testing.T) {
 	}
 	if opened.note.Title != "My First Note" {
 		t.Fatalf("title = %q", opened.note.Title)
+	}
+}
+
+func TestVaultRemovedLessonCommandsShowTargetedNotice(t *testing.T) {
+	for _, ex := range []string{"learn the cold war", "gen maps", "lesson pointers"} {
+		m := newTestVaultModel(t)
+		tm, cmd := m.runEx(ex)
+		m = tm.(VaultModel)
+		if cmd != nil {
+			t.Fatalf(":%s should not dispatch a command", ex)
+		}
+		if !strings.Contains(m.notice, "was removed") || !strings.Contains(m.notice, ":explain/:ask") {
+			t.Fatalf(":%s notice = %q, want targeted removal notice", ex, m.notice)
+		}
+		if m.pending != 0 {
+			t.Fatalf(":%s should not leave pending work, got %d", ex, m.pending)
+		}
+	}
+}
+
+func TestVaultCommandCompletionExcludesRemovedLessonCommands(t *testing.T) {
+	removed := map[string]bool{"learn": true, "gen": true, "lesson": true}
+	for _, cmd := range vaultExCmds {
+		if removed[cmd] {
+			t.Fatalf("vaultExCmds still includes removed command %q", cmd)
+		}
 	}
 }
 
@@ -256,7 +245,7 @@ func TestVaultViewRenders(t *testing.T) {
 	if !strings.Contains(out, "d-code") {
 		t.Fatalf("view should render the title bar, got:\n%s", out)
 	}
-	// And after opening a note (study header path exercised).
+	// And after opening a note (chat header path exercised).
 	opened := vSaveOpenCmd(m.svc, "x/N.md", "# N\n\nbody\n")().(vOpenedMsg)
 	tm, _ := m.Update(opened)
 	m = tm.(VaultModel)

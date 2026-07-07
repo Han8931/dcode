@@ -48,22 +48,25 @@ func Serve(addr string, svc *core.Service) error {
 		md:  goldmark.New(goldmark.WithExtensions(extension.GFM)),
 	}
 
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s.routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return srv.ListenAndServe()
+}
+
+func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /api/tree", s.handleTree)
 	mux.HandleFunc("GET /api/note", s.handleGetNote)
 	mux.HandleFunc("PUT /api/note", s.handleSaveNote)
 	mux.HandleFunc("POST /api/preview", s.handlePreview)
-	mux.HandleFunc("POST /api/generate", s.handleGenerate)
+	mux.HandleFunc("POST /api/generate", s.handleGenerateRemoved)
 	mux.HandleFunc("GET /api/backlinks", s.handleBacklinks)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	return srv.ListenAndServe()
+	return mux
 }
 
 // --- handlers (thin: parse -> core -> render) ---
@@ -136,23 +139,8 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"html": renderWikilinks(buf.String())})
 }
 
-func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Request string `json:"request"`
-	}
-	if !readJSON(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.Request) == "" {
-		http.Error(w, "missing request", http.StatusBadRequest)
-		return
-	}
-	meta, err := s.svc.GenerateLesson(r.Context(), req.Request)
-	if err != nil {
-		httpErr(w, err)
-		return
-	}
-	writeJSON(w, meta)
+func (s *Server) handleGenerateRemoved(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "note generation was removed; use the editor to create notes and /api/chat or :explain for code help", http.StatusGone)
 }
 
 func (s *Server) handleBacklinks(w http.ResponseWriter, r *http.Request) {
@@ -169,8 +157,8 @@ func (s *Server) handleBacklinks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"backlinks": back})
 }
 
-// handleChat streams the tutor's reply as plain text chunks. The request may
-// name the open note (path) so the reply is grounded in what the learner is
+// handleChat streams the assistant's reply as plain text chunks. The request may
+// name the open note (path) so the reply is grounded in what the user is
 // currently reading.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {

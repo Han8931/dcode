@@ -73,15 +73,14 @@ var (
 	markedItem = lipgloss.NewStyle().Foreground(wipColor)
 
 	// Chat transcript styles. Each speaker turn opens with a colored BADGE on
-	// its own line (" you " / " tutor " / " lesson " on a filled background) so
+	// its own line (" you " / " tutor " on a filled background) so
 	// who is talking is unmistakable even when skimming; the message body stays
 	// a calm, high-contrast neutral so long passages read comfortably.
 	chatBodyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 
-	chatUserBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("81"))  // learner — cyan-blue
-	chatTutorBadge  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("79"))  // tutor — teal
-	chatLessonBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("222")) // lesson — warm gold
-	chatQuizBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("215")) // quiz — peach
+	chatUserBadge  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("81"))  // user — cyan-blue
+	chatTutorBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("79"))  // tutor — teal
+	chatQuizBadge  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("215")) // quiz — peach
 
 	// chatBusyStyle renders the in-pane "⠹ tutor thinking…" progress line.
 	chatBusyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("79")).Italic(true)
@@ -149,7 +148,7 @@ func enableTUIColor() {
 // so the whole app measures glyph widths the one way the rest of the render
 // stack already does. Under a CJK locale (LANG=ko_KR/ja_JP/zh_*) go-runewidth
 // auto-enables East Asian Width, counting ambiguous characters — the arrows,
-// ≤ ≥ · × ² and dashes that fill lessons and AI replies — as 2 cells. But the
+// ≤ ≥ · × ² and dashes that fill AI replies — as 2 cells. But the
 // chat viewport, the textarea, and charm's x/ansi all measure them as 1 (via
 // uniseg), as do modern terminals by default. That split is what corrupted the
 // layout (misaligned borders, " ????" cell garbage) once scrolled into

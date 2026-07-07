@@ -35,7 +35,7 @@ var pasteFromClipboard = func() (string, error) {
 func exportChat(c *chatModel, dir, label string) string {
 	text, ok := c.transcript()
 	if !ok {
-		return "nothing to export yet — ask the tutor something first"
+		return "nothing to export yet — ask the assistant something first"
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "⚠ export failed: " + err.Error()

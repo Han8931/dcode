@@ -184,7 +184,6 @@ Notes (markdown) are fully editable. `Ctrl-S` saves; edits autosave as you go.
 | You type | d-code does |
 |---|---|
 | `:new <title>` | create a new markdown note |
-| `:learn <topic>` | AI-writes a note about a topic into your notes |
 | `:ask <question>` | a grounded chat about the open file (or a Visual selection) |
 | `:polish` · `:edit <instruction>` | AI rewrite of the open note (or a selection), streamed to review |
 | `:apply` · `:discard` | accept (undoable) or drop a proposed rewrite |
@@ -223,7 +222,7 @@ Visual mode, undo/redo, a jumplist (`Ctrl-O` / `Ctrl-I`), and syntax highlightin
 `:` opens the command line. Commands:
 
 `:explain` · `:decode` · `:note` · `:ask` · `:polish` · `:edit` · `:apply` · `:discard`
-· `:new` · `:learn` · `:backlinks` · `:copy` · `:paste` · `:export` · `:fold` ·
+· `:new` · `:backlinks` · `:copy` · `:paste` · `:export` · `:fold` ·
 `:compact` · `:wide` · `:q`
 
 `Tab` completes command names.

@@ -40,26 +40,25 @@ func explainService(t *testing.T, files map[string]string) (*Service, string, st
 func TestProjectContextGathersSiblings(t *testing.T) {
 	s, _, _ := explainService(t, map[string]string{
 		"pkg/a.go":     "package pkg\n\nfunc A() {}\n",
-		"pkg/b.go":     "package pkg\n\nfunc B() {}\n",
-		"other/c.go":   "package other\n\nfunc C() {}\n",
+		"pkg/b.go":     "package pkg\n\nfunc B() { bodyMarkerB() }\n",
+		"other/c.go":   "package other\n\nfunc C() { bodyMarkerC() }\n",
 		"pkg/notes.md": "# not source\n",
 	})
 	ctx := s.projectContext("pkg/a.go")
-	// The sibling's contents are included (same package/dir).
-	if !strings.Contains(ctx, "pkg/b.go") || !strings.Contains(ctx, "func B") {
-		t.Fatalf("sibling pkg/b.go should be in project context:\n%s", ctx)
+	// The sibling's CONTENTS are included (same package/dir) — depth.
+	if !strings.Contains(ctx, "pkg/b.go") || !strings.Contains(ctx, "bodyMarkerB") {
+		t.Fatalf("sibling pkg/b.go should be inlined in project context:\n%s", ctx)
 	}
-	// The project file map lists every source path, including other dirs.
-	if !strings.Contains(ctx, "Project source files:") || !strings.Contains(ctx, "other/c.go") {
-		t.Fatalf("project file map should list all source paths:\n%s", ctx)
+	// The structural repo map lists every source path's signatures, including
+	// other dirs — breadth.
+	if !strings.Contains(ctx, "Repository map") ||
+		!strings.Contains(ctx, "other/c.go") || !strings.Contains(ctx, "func C()") {
+		t.Fatalf("repo map should list every source file's signatures:\n%s", ctx)
 	}
-	// But only directory neighbours' CONTENTS are inlined — not the target's own
-	// body, and not files from other directories.
-	if strings.Contains(ctx, "func A") {
-		t.Fatal("the target file's own body should not be inlined as context")
-	}
-	if strings.Contains(ctx, "func C") {
-		t.Fatal("other directories' contents should not be inlined")
+	// But a non-neighbour file's full BODY is not inlined — only its signature
+	// appears in the map, never its statements.
+	if strings.Contains(ctx, "bodyMarkerC") {
+		t.Fatal("other directories' file bodies should not be inlined")
 	}
 	// Markdown is never treated as source context.
 	if strings.Contains(ctx, "notes.md") {
@@ -74,7 +73,7 @@ func TestProjectContextPullsReferencedDefinitions(t *testing.T) {
 		"ui/widget.go": "package ui\n\n// Widget is a thing.\ntype Widget struct{ name string }\n\n" +
 			"func NewWidget() *Widget { return &Widget{} }\n\nfunc (w *Widget) Render() {}\n",
 		"app/util.go":  "package app\n\nfunc helper() {}\n",
-		"other/zzz.go": "package other\n\nfunc Unused() {}\n",
+		"other/zzz.go": "package other\n\nfunc Unused() { unusedBodyMarker() }\n",
 	})
 	ctx := s.projectContext("app/main.go")
 
@@ -86,9 +85,10 @@ func TestProjectContextPullsReferencedDefinitions(t *testing.T) {
 	if !strings.Contains(ctx, "NewWidget") || !strings.Contains(ctx, "Widget") {
 		t.Fatalf("snippet header should list the referenced symbols:\n%s", ctx)
 	}
-	// An unreferenced file from another dir is NOT inlined.
-	if strings.Contains(ctx, "func Unused") {
-		t.Fatalf("unreferenced cross-dir file should not be inlined:\n%s", ctx)
+	// An unreferenced cross-dir file's BODY is not inlined — its signature may
+	// appear in the repo map, but its statements never do.
+	if strings.Contains(ctx, "unusedBodyMarker") {
+		t.Fatalf("unreferenced cross-dir file's body should not be inlined:\n%s", ctx)
 	}
 }
 

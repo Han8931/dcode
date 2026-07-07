@@ -243,10 +243,10 @@ func (m *Model) SetSize(w, h int) {
 	m.cmd.Width = w
 }
 
-// SetValue replaces the editor's contents (e.g. when switching challenges) and
-// moves the cursor to the top, as if opening the file fresh. The undo history
-// belongs to the previous buffer, so it is dropped — undo must never resurrect
-// another note/challenge's text. The textarea ignores keys while blurred, so
+// SetValue replaces the editor's contents (e.g. when switching files or notes)
+// and moves the cursor to the top, as if opening the file fresh. The undo
+// history belongs to the previous buffer, so it is dropped — undo must never
+// resurrect another file's text. The textarea ignores keys while blurred, so
 // focus is momentarily restored for the move.
 func (m *Model) SetValue(s string) {
 	m.ta.SetValue(s)
@@ -265,7 +265,7 @@ func (m Model) Value() string { return m.ta.Value() }
 // ReplaceAll swaps the whole buffer for s as a SINGLE undoable edit: it
 // snapshots the current text first, so `u` restores it. Unlike SetValue (which
 // clears history for a freshly loaded note), this keeps the undo stack — used
-// to apply an AI rewrite the learner can revert. The cursor returns to the top.
+// to apply an AI rewrite the user can revert. The cursor returns to the top.
 func (m *Model) ReplaceAll(s string) {
 	if m.ta.Value() == s {
 		return
@@ -869,7 +869,7 @@ func (m Model) runCommand(raw string) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		m.status = "saved ✓  (resume later with the same challenge)"
+		m.status = "saved ✓"
 		return m, nil
 	case "wq":
 		if m.save != nil {

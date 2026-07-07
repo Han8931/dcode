@@ -7,7 +7,7 @@ import (
 )
 
 // shell.go holds the small set of package-level types and helpers that used to
-// live in the (now-removed) coding-tutor TUI but are still shared by the vault
+// live in older TUI flows but are still shared by the vault
 // front-end: the pane identifiers, the run-outcome type, and a couple of tiny
 // render helpers.
 

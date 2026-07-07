@@ -7,12 +7,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// sidebarItem is one row: a challenge and its progress in the tutor TUI, or a
-// node of the vault's file tree (a directory or note) in the vault TUI.
+// sidebarItem is one row in the sidebar: usually a node of the workspace file
+// tree (a directory, source file, or note).
 type sidebarItem struct {
 	id     string
-	title  string // first line of the prompt, the topic title, or the file name
-	status string // "done" | "in_progress" | ""
+	title  string // display name for the row
+	status string // optional progress marker: "done" | "in_progress" | ""
 	active bool   // true when this row is open in the editor (rendered bold)
 	header bool   // a non-selectable section heading (e.g. a curriculum module)
 
@@ -159,7 +159,7 @@ func (s sidebarModel) window() (int, int) {
 }
 
 // rowGlyph picks the one-cell marker before the title: the fold state for
-// directories, the progress state for challenges, a blank otherwise.
+// directories, an optional progress state, or a blank otherwise.
 func (it sidebarItem) rowGlyph() string {
 	switch {
 	case it.dir && it.expanded:

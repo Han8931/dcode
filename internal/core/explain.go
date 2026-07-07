@@ -17,7 +17,8 @@ import (
 // still carrying enough surrounding code to be useful.
 const (
 	maxExplainCodeChars = 16000 // the file being explained
-	maxProjectCtxChars  = 7000  // the related-files digest, total
+	maxProjectCtxChars  = 9000  // the related-files digest, total
+	maxProjectMapChars  = 4000  // the structural repo map within that digest
 	projectSiblingHead  = 40    // lines of each related file included
 	refDefWindow        = 24    // lines shown around each referenced definition
 	refDefLead          = 4     // lines of lead-in above the definition (doc comment, related decls)
@@ -58,8 +59,9 @@ func (s *Service) ExplainStream(ctx context.Context, req ExplainRequest, onDelta
 // projectContext builds cross-file context so the model understands the code as
 // part of a project, not a single file in isolation:
 //
-//  1. a map of the whole project's source files (paths only, capped), so the
-//     model knows the overall structure and what else exists;
+//  1. a structural repo map of the whole project — every source file's
+//     top-level signatures, ranked most-referenced first — so the model knows
+//     the overall structure and what else exists (see repomap.go);
 //  2. the DEFINITIONS the file depends on — for each top-level symbol it
 //     references that's defined elsewhere, a focused snippet of that definition,
 //     a poor-man's "go to definition" (see symbols.go); and
@@ -91,17 +93,14 @@ func (s *Service) projectContext(p string) string {
 		}
 	}
 	var b strings.Builder
+	// (1) Structural repo map — every source file's top-level signatures, ranked
+	// most-referenced first, so the model sees how the target file sits in the
+	// whole project (not just a flat list of paths).
 	if len(paths) > 1 {
-		b.WriteString("Project source files:\n")
-		shown := paths
-		if len(shown) > maxProjectFileList {
-			shown = shown[:maxProjectFileList]
-		}
-		for _, fp := range shown {
-			b.WriteString("  " + fp + "\n")
-		}
-		if len(paths) > len(shown) {
-			b.WriteString("  … and " + itoa(len(paths)-len(shown)) + " more\n")
+		if m := renderRepoMap(buildRepoMap(files), nil, maxProjectMapChars); m != "" {
+			b.WriteString("Repository map (signatures, most-referenced first):\n")
+			b.WriteString(m)
+			b.WriteString("\n")
 		}
 	}
 
@@ -149,9 +148,19 @@ func (s *Service) projectContext(p string) string {
 // file it explains — while physically living in the separate notes root, keeping
 // the user's source repo clean.
 func (s *Service) SaveExplanation(srcPath, explanation string) (NoteMeta, error) {
+	return s.SaveExplanationAt(srcPath, "", explanation)
+}
+
+// SaveExplanationAt is SaveExplanation with an optional human-readable location
+// suffix such as "lines 12-40" for explanations of a Visual selection.
+func (s *Service) SaveExplanationAt(srcPath, loc, explanation string) (NoteMeta, error) {
 	notePath := srcPath + ".md"
+	from := srcPath
+	if strings.TrimSpace(loc) != "" {
+		from += " " + strings.TrimSpace(loc)
+	}
 	body := "# Explanation — " + path.Base(srcPath) + "\n\n" +
-		"_Decoded by d-code from `" + srcPath + "`._\n\n" +
+		"_Decoded by d-code from `" + from + "`._\n\n" +
 		strings.TrimSpace(explanation) + "\n"
 	return s.SaveNote(notePath, body)
 }

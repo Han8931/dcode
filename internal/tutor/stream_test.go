@@ -38,7 +38,7 @@ func TestChatStreamDeltasAndContext(t *testing.T) {
 	tut := New(config.AIConfig{Provider: "compatible", BaseURL: srv.URL, Model: "m"})
 	var deltas []string
 	full, err := tut.ChatStream(context.Background(),
-		"Current challenge: write SumTo",
+		"Current file: math.go",
 		[]ChatTurn{{Role: "user", Content: "help"}},
 		func(d string) { deltas = append(deltas, d) })
 	if err != nil {
@@ -51,7 +51,7 @@ func TestChatStreamDeltasAndContext(t *testing.T) {
 		t.Fatalf("deltas = %v", deltas)
 	}
 	// The study context must ride along as a system message.
-	if !strings.Contains(body, "write SumTo") {
+	if !strings.Contains(body, "Current file: math.go") {
 		t.Fatalf("request body missing the study context:\n%s", body)
 	}
 	if !strings.Contains(body, `"stream":true`) {
@@ -81,7 +81,7 @@ func TestChatWithoutContextOmitsContextMessage(t *testing.T) {
 		func(string) {}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(body, "Context — what the learner") {
+	if strings.Contains(body, "Context — what the user") {
 		t.Fatalf("empty context must not inject a context message:\n%s", body)
 	}
 }

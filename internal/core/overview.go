@@ -28,9 +28,10 @@ that the provided material does not support.`
 
 const (
 	maxOverviewFileList = 400   // source paths listed in the project map
-	maxOverviewKeyFiles = 12    // files whose heads are inlined as "key files"
+	maxOverviewMapChars = 9000  // budget for the structural repo map (breadth)
+	maxOverviewKeyFiles = 6     // files whose heads are inlined as "key files" (depth)
 	maxOverviewKeyHead  = 60    // lines of each key file included
-	maxOverviewCtxChars = 14000 // total digest budget
+	maxOverviewCtxChars = 16000 // total digest budget
 )
 
 // OverviewStream streams an architecture overview of the whole project into
@@ -64,6 +65,16 @@ func (s *Service) projectDigest() string {
 			break
 		}
 		b.WriteString("  " + f.RelPath + "\n")
+	}
+
+	// Structural repo map: every file's top-level signatures, ranked so the
+	// most-referenced code leads. This gives the model the shape of the WHOLE
+	// project — its breadth — where the key-file heads below add depth on the
+	// entry points.
+	if m := renderRepoMap(buildRepoMap(files), nil, maxOverviewMapChars); m != "" {
+		b.WriteString("\nRepository map (signatures, most-referenced first):\n")
+		b.WriteString(m)
+		b.WriteString("\n")
 	}
 
 	// Key files: shallowest path depth first (entry points / package roots), then

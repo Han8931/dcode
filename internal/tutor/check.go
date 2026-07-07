@@ -62,8 +62,8 @@ func (t *Tutor) Models(ctx context.Context) ([]string, error) {
 }
 
 // Ping sends a minimal chat request and returns the round-trip time. It uses
-// the same transport as real tutoring calls, so a passing ping means lessons,
-// feedback, and chat will work.
+// the same transport as real AI calls, so a passing ping means explanations,
+// note edits, summaries, and chat will work.
 func (t *Tutor) Ping(ctx context.Context) (time.Duration, error) {
 	start := time.Now()
 	_, err := t.chat(ctx, "Reply with the single word: ok", "ping")

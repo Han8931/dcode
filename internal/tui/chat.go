@@ -18,8 +18,7 @@ type chatRole int
 
 const (
 	roleSystem chatRole = iota // app notices: "— now on: … —", errors
-	roleLesson                 // the lesson text
-	roleUser                   // the learner's typed question
+	roleUser                   // the user's typed question
 	roleTutor                  // the AI's reply / feedback
 	roleQuiz                   // the current topic's quiz/task prompt
 	roleOK                     // test pass line
@@ -55,8 +54,8 @@ type chatModel struct {
 	busy     string
 	busyTick int
 
-	// codeLang is the language assumed for UNLABELED ``` fences in tutor and
-	// lesson messages (labeled fences always win). Empty renders them plain.
+	// codeLang is the language assumed for UNLABELED ``` fences in assistant
+	// messages (labeled fences always win). Empty renders them plain.
 	codeLang string
 
 	// Input history, recalled with the arrow keys (readline-style). histPos ==
@@ -78,7 +77,7 @@ type chatModel struct {
 // dragged head. active stays false until the mouse actually moves, so a plain
 // click only clears the previous selection.
 type chatSelection struct {
-	active               bool
+	active                bool
 	anchorLine, anchorCol int
 	headLine, headCol     int
 }
@@ -321,7 +320,7 @@ func copySelection(c *chatModel) string {
 }
 
 // snapshot returns the transcript blocks so a parent can stash them away when
-// the learner switches topics.
+// the user switches topics.
 func (c *chatModel) snapshot() []chatBlock { return c.blocks }
 
 // restore replaces the transcript (nil = start fresh) and jumps to its tail —
@@ -372,8 +371,6 @@ func (c chatModel) renderBlock(blk chatBlock) string {
 		return chatUserBadge.Render(" you ") + "\n" + c.renderRichBody(blk.text)
 	case roleTutor:
 		return chatTutorBadge.Render(" tutor ") + "\n" + c.renderRichBody(blk.text)
-	case roleLesson:
-		return chatLessonBadge.Render(" lesson ") + "\n" + c.renderRichBody(blk.text)
 	case roleQuiz:
 		return chatQuizBadge.Render(" quiz ") + "\n" + c.renderRichBody(blk.text)
 	case roleOK:
@@ -385,7 +382,7 @@ func (c chatModel) renderBlock(blk chatBlock) string {
 	}
 }
 
-// renderRichBody renders a tutor/lesson body: prose is word-wrapped neutrally,
+// renderRichBody renders an assistant body: prose is word-wrapped neutrally,
 // and fenced ``` code blocks are syntax-highlighted (via the editor's
 // highlighter) behind a gutter bar instead of being word-wrapped.
 func (c chatModel) renderRichBody(text string) string {
@@ -396,7 +393,7 @@ func (c chatModel) renderRichBody(text string) string {
 
 	flushProse := func() {
 		if len(prose) > 0 {
-			// Tutor/lesson prose is markdown: style headings, **bold**,
+			// Assistant prose is markdown: style headings, **bold**,
 			// `code`, [[wikilinks]], bullets, and quotes before wrapping
 			// (lipgloss wraps ANSI-aware, so the colors survive the reflow).
 			md := editor.Highlight("markdown", strings.Join(prose, "\n"))
@@ -467,7 +464,7 @@ func (c chatModel) renderRichBody(text string) string {
 			code = append(code, ln)
 			continue
 		}
-		// Markdown's other code idiom: 4-space-indented lines (lessons use it a
+		// Markdown's other code idiom: 4-space-indented lines (model replies use it a
 		// lot). Word-wrapping them as prose breaks identifiers mid-word, so they
 		// render through the code path instead.
 		if strings.HasPrefix(ln, "    ") && trimmed != "" {
@@ -575,7 +572,7 @@ func (c *chatModel) histKey(msg tea.KeyMsg) bool {
 // Update routes input to the transcript or the input area. Scroll keys and mouse
 // wheel events drive the viewport; everything else is typing. We deliberately do
 // NOT forward keystrokes to the viewport's own keymap — its defaults bind j/k/f/b
-// etc., which would scroll the transcript while the learner types those letters.
+// etc., which would scroll the transcript while the user types those letters.
 func (c chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.MouseMsg:
@@ -755,21 +752,21 @@ func (c *chatModel) failStream(text string) {
 
 // --- copying replies ---
 
-// lastReply returns the most recent tutor or lesson message.
+// lastReply returns the most recent tutor message.
 func (c chatModel) lastReply() (string, bool) {
 	for i := len(c.blocks) - 1; i >= 0; i-- {
-		if r := c.blocks[i].role; r == roleTutor || r == roleLesson {
+		if r := c.blocks[i].role; r == roleTutor {
 			return c.blocks[i].text, true
 		}
 	}
 	return "", false
 }
 
-// lastCode returns the last fenced code block from the most recent tutor or
-// lesson message that contains one.
+// lastCode returns the last fenced code block from the most recent tutor
+// message that contains one.
 func (c chatModel) lastCode() (string, bool) {
 	for i := len(c.blocks) - 1; i >= 0; i-- {
-		if r := c.blocks[i].role; r != roleTutor && r != roleLesson {
+		if r := c.blocks[i].role; r != roleTutor {
 			continue
 		}
 		if code, ok := lastFence(c.blocks[i].text); ok {
@@ -819,8 +816,6 @@ func (c chatModel) transcript() (string, bool) {
 			label = "you: "
 		case roleTutor:
 			label = "tutor: "
-		case roleLesson:
-			label = "lesson: "
 		case roleQuiz:
 			label = "quiz: "
 		}
@@ -830,7 +825,7 @@ func (c chatModel) transcript() (string, bool) {
 }
 
 // copyChat copies part of the transcript to the system clipboard — what is ""
-// (last tutor/lesson reply), "code" (last fenced block), or "all" (the whole
+// (last assistant reply), "code" (last fenced block), or "all" (the whole
 // conversation) — and returns a status notice describing the outcome.
 func copyChat(c *chatModel, what string) string {
 	var (
@@ -853,7 +848,7 @@ func copyChat(c *chatModel, what string) string {
 		if what == "code" {
 			return "no code block found in the tutor's replies"
 		}
-		return "nothing to copy yet — ask the tutor something first"
+		return "nothing to copy yet — ask the assistant something first"
 	}
 	if err := copyToClipboard(text); err != nil {
 		// The native clipboard failed (e.g. headless/SSH) but the OSC 52 escape

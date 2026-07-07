@@ -237,7 +237,7 @@ func (m *Model) paragraph(dir int) {
 // centerView places the cursor at (row, col) with its line roughly mid-
 // screen. SetValue resets the textarea's viewport to the top, and a plain
 // moveTo would re-scroll only until the cursor reaches the view's bottom edge
-// — leaving the window somewhere the learner wasn't (the post-undo "screen
+// — leaving the window somewhere the user wasn't (the post-undo "screen
 // jumped" effect). The viewport has no public scroll API, but it always
 // anchors to the cursor: jumping first to a row half a window below pins that
 // row to the bottom edge, so stepping back up leaves the target centered.
@@ -571,7 +571,7 @@ func (m *Model) redo() {
 }
 
 // clearHistory drops the undo/redo stacks — called when the buffer is replaced
-// wholesale (switching notes/challenges), so undo never crosses files.
+// wholesale (switching files/notes), so undo never crosses files.
 func (m *Model) clearHistory() {
 	m.undoStack, m.redoStack = nil, nil
 }
@@ -633,7 +633,7 @@ func (m *Model) insertNewlineIndented() {
 	}
 }
 
-// electricClose dedents the current line one level when the learner types a
+// electricClose dedents the current line one level when the user types a
 // closing brace on a line that is so far only indentation — so "}" lands at
 // the block's opening depth, as in Vim/IDEs. The brace itself is inserted by
 // the caller afterwards.

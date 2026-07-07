@@ -138,14 +138,14 @@ func TestVaultAskSelectionNoQuestionFocusesChat(t *testing.T) {
 		t.Fatal("no question yet — should not stream")
 	}
 	if m.focus != paneChat {
-		t.Fatal(":ask should focus the chat so the learner can type")
+		t.Fatal(":ask should focus the chat so the user can type")
 	}
 }
 
 // Regression: on a long note the focused excerpt must survive context
 // clamping (it leads the context, so the note body — not the excerpt — is what
 // gets trimmed). Previously the excerpt was appended last and truncated away,
-// so the tutor lost the discussion's subject.
+// so the assistant lost the discussion's subject.
 func TestVaultAskExcerptSurvivesClampingLongNote(t *testing.T) {
 	m := newTestVaultModel(t)
 	long := "# Big\n\n" + strings.Repeat("filler sentence about something. ", 600) // ~19k chars
@@ -159,7 +159,7 @@ func TestVaultAskExcerptSurvivesClampingLongNote(t *testing.T) {
 	if !strings.Contains(clamped, "THE-KEY-EXCERPT-XYZ") {
 		t.Fatal("the focused excerpt must survive clamping on a long note")
 	}
-	if !strings.HasPrefix(strings.TrimSpace(clamped), "The learner has SELECTED") {
+	if !strings.HasPrefix(strings.TrimSpace(clamped), "The user has SELECTED") {
 		t.Fatalf("context should lead with the excerpt, got:\n%.120s", clamped)
 	}
 }
@@ -263,7 +263,7 @@ func TestVaultPolishClearedOnNoteSwitch(t *testing.T) {
 
 // Offline, :polish refuses with guidance instead of streaming junk.
 func TestVaultPolishOfflineRefused(t *testing.T) {
-	m := newTestVaultModel(t) // newTestVaultModel uses an offline tutor
+	m := newTestVaultModel(t) // newTestVaultModel uses an offline AI client
 	m = openNote(t, m, "N.md", "# n\n")
 
 	tm, _ := m.runEx("polish")

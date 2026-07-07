@@ -22,7 +22,7 @@ func forceColorTUI(t *testing.T) {
 
 // The app must pin ambiguous-width characters to one cell so every pane (chat
 // viewport via uniseg, editor soft-wrap via go-runewidth) measures the arrows,
-// ≤/≥, · and ² that fill lessons the same way. Under a CJK locale go-runewidth
+// ≤/≥, · and ² that fill AI replies. Under a CJK locale go-runewidth
 // would otherwise call them 2 cells and the layout would drift.
 func TestNormalizeRuneWidthNarrowsAmbiguous(t *testing.T) {
 	prev := runewidth.DefaultCondition.EastAsianWidth
@@ -555,7 +555,7 @@ func TestVaultPerNoteTutorHistorySeparate(t *testing.T) {
 	}
 }
 
-// Tutor/lesson prose is markdown and must arrive styled in the transcript
+// Assistant prose is markdown and must arrive styled in the transcript
 // (headings, bold, inline code, wikilinks) — not as flat body text.
 func TestChatRendersMarkdownProse(t *testing.T) {
 	old := lipgloss.ColorProfile()
@@ -564,7 +564,7 @@ func TestChatRendersMarkdownProse(t *testing.T) {
 
 	c := newChat()
 	c.setSize(60, 20)
-	c.append(roleLesson, "# Heading\n\nuse **bold** and ****strong**** and `code` with [[Link]]")
+	c.append(roleTutor, "# Heading\n\nuse **bold** and ****strong**** and `code` with [[Link]]")
 	content := c.renderBlock(c.blocks[0])
 	for what, want := range map[string]string{
 		"heading":  "\x1b[1;38;5;81m# Heading",

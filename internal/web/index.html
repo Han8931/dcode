@@ -31,8 +31,8 @@
   .scroll { overflow: auto; flex: 1; min-height: 0; }
 
   /* sidebar */
-  .gen { padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  .gen input, .search input { width: 100%; }
+  .note-actions { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .search input { width: 100%; }
   input, textarea, button {
     font: inherit; color: var(--text); background: var(--panel2);
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
@@ -97,10 +97,8 @@
   <!-- LEFT: files -->
   <section class="pane">
     <h2>Files</h2>
-    <div class="gen">
-      <input id="genInput" placeholder="Write a note about… e.g. how HTTP works">
+    <div class="note-actions">
       <div class="row">
-        <button class="primary" id="genBtn">Generate note</button>
         <button id="newBtn" title="New blank note">New</button>
       </div>
     </div>
@@ -217,20 +215,6 @@ async function newNote() {
   await saveNote();
   await loadTree();
 }
-async function generate() {
-  const req = $("#genInput").value.trim();
-  if (!req) { toast("Type a topic"); return; }
-  setStatus("generating note…");
-  $("#genBtn").disabled = true;
-  try {
-    const r = await api("POST", "/api/generate", { request: req });
-    $("#genInput").value = "";
-    await loadTree();
-    await openNote(r.path);
-    toast("Created: " + r.title);
-  } catch (e) { toast("Generate failed: " + e.message); }
-  finally { setStatus(""); $("#genBtn").disabled = false; }
-}
 
 // ---- preview + backlinks ----
 let previewOn = false;
@@ -321,8 +305,6 @@ async function sendChat() {
 }
 
 // ---- wiring ----
-$("#genBtn").onclick = generate;
-$("#genInput").addEventListener("keydown", e => { if (e.key === "Enter") generate(); });
 $("#newBtn").onclick = newNote;
 $("#saveBtn").onclick = saveNote;
 $("#previewBtn").onclick = () => showPreview(!previewOn);

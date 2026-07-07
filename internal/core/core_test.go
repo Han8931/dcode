@@ -13,7 +13,7 @@ import (
 )
 
 // newTestService builds a Service over a temp source root + temp notes root and
-// an offline tutor (no API key, non-Ollama provider => offline built-in content).
+// an offline AI client (no API key, non-Ollama provider => setup guidance replies).
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	code, err := vault.Open(t.TempDir())
@@ -56,21 +56,6 @@ func TestSaveOpenList(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Path != "history/Cold War.md" {
 		t.Fatalf("ListNotes = %+v", list)
-	}
-}
-
-func TestGenerateLessonWritesNote(t *testing.T) {
-	s := newTestService(t)
-	meta, err := s.GenerateLesson(context.Background(), "the french revolution")
-	if err != nil {
-		t.Fatalf("GenerateLesson: %v", err)
-	}
-	if meta.Path == "" || meta.Title == "" {
-		t.Fatalf("generated meta empty: %+v", meta)
-	}
-	// It must actually persist to the vault.
-	if _, err := s.OpenNote(meta.Path); err != nil {
-		t.Fatalf("generated note not readable: %v", err)
 	}
 }
 

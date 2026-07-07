@@ -32,13 +32,13 @@ type Service struct {
 	tutor *tutor.Tutor
 }
 
-// New builds a Service over a source root, a notes root, and a tutor. notes may
+// New builds a Service over a source root, a notes root, and an AI client. notes may
 // be nil for read-only/testing setups.
 func New(code, notes *vault.Vault, t *tutor.Tutor) *Service {
 	return &Service{code: code, notes: notes, tutor: t}
 }
 
-// Offline reports whether the tutor is running on built-in content (no provider).
+// Offline reports whether the AI client has no configured provider.
 func (s *Service) Offline() bool { return s.tutor.Offline() }
 
 // NoteMeta is the lightweight view of a note used in lists, trees, and links.
@@ -76,7 +76,7 @@ func (s *Service) ListNotes() ([]NoteMeta, error) {
 // TreeEntry is one node of the vault's on-disk structure: a directory or a
 // markdown note. Paths are vault-relative and "/"-separated; Name is the
 // display name (the base name, without ".md" for notes), so file-tree UIs
-// mirror the learner's real layout.
+// mirror the user's real layout.
 type TreeEntry struct {
 	Path string `json:"path"`
 	Name string `json:"name"`
@@ -158,27 +158,6 @@ func (s *Service) SaveNote(path, body string) (NoteMeta, error) {
 	return metaOf(saved), nil
 }
 
-// GenerateLesson turns a learn-request into a new AI-authored note saved in the
-// vault, and returns its metadata. This is the headline "I want to learn X →
-// owned, linkable note" flow.
-func (s *Service) GenerateLesson(ctx context.Context, request string) (NoteMeta, error) {
-	nc, err := s.tutor.GenerateNote(ctx, request)
-	if err != nil {
-		return NoteMeta{}, err
-	}
-	saved, err := s.writeToNotes(vault.Note{
-		Title:   nc.Title,
-		Subject: nc.Subject,
-		Tags:    nc.Tags,
-		Source:  "ai-generated",
-		Body:    nc.Body,
-	})
-	if err != nil {
-		return NoteMeta{}, err
-	}
-	return metaOf(saved), nil
-}
-
 // Backlinks returns the notes whose body links (via [[wikilink]]) to the note at
 // path. Currently an in-memory scan of the vault; a SQLite index will back this
 // later without changing the signature.
@@ -254,8 +233,8 @@ func ClampContext(s string) string {
 	return string(r[:maxContextChars]) + "\n…(truncated)"
 }
 
-// Chat continues a free-form tutoring conversation. studyContext is what the
-// learner is currently looking at (note body, challenge, code) so replies stay
+// Chat continues a free-form assistant conversation. studyContext is what the
+// user is currently looking at (note body, selected code, or source file) so replies stay
 // grounded; "" sends conversation only.
 func (s *Service) Chat(ctx context.Context, studyContext string, history []tutor.ChatTurn) (string, error) {
 	return s.ChatStream(ctx, studyContext, history, nil)

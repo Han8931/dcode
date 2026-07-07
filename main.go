@@ -121,7 +121,7 @@ func runTUI() error {
 	return err
 }
 
-// runServe starts the local web UI over the same vault and tutor as the TUI.
+// runServe starts the local web UI over the same vault and AI client as the TUI.
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "config.toml", "path to config file")
@@ -218,7 +218,7 @@ func runCheck(args []string) error {
 		}
 	}
 
-	// Real round trip through the same code path lessons/chat use.
+	// Real round trip through the same code path explanations/chat use.
 	fmt.Println("  sending a test request…")
 	dur, err := tut.Ping(ctx)
 	if err != nil {
