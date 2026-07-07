@@ -41,6 +41,10 @@ over one shared Go core, working on the same files.
   surrounding file — and, when a single file isn't enough, pulls in the
   *definitions* it depends on (the symbols it references, defined elsewhere in the
   project) — so the answer reflects how the code actually fits together.
+- 🧭 **Structural repo map.** meari-dcode parses your code into a ranked map of every
+  file's signatures — via Go's own parser and **Tree-sitter** for Python,
+  JavaScript, TypeScript/TSX, and Rust — and feeds it to `:overview`, `:explain`,
+  and `:diff`. View it any time with `:map` (instant, no AI needed).
 - ✍️ **Explanations become notes, not chat scroll.** Save a decode as a linked
   markdown note you own, edit, and revisit.
 - 🪄 **Edit your notes with AI.** `:polish` / `:edit` rewrite a note (or a Visual
@@ -53,6 +57,11 @@ over one shared Go core, working on the same files.
   calls you configure.
 
 ## 🚀 Quick start
+
+> **Prerequisite:** a C compiler (cgo) must be available — the multi-language repo
+> map uses Tree-sitter, a C library. macOS (Xcode Command Line Tools) and most
+> Linux (`gcc`/`clang`) setups already have one; `go install`/`go build` handle
+> the rest.
 
 Install it once, then run it anywhere:
 

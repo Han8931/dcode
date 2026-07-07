@@ -66,15 +66,18 @@ type mapFile struct {
 	rank int
 }
 
-// fileDefs extracts the top-level definitions of one source file. Go files are
-// parsed for exact signatures; every other language uses the heuristic regexes
-// from symbols.go. A Go file that fails to parse (mid-edit, say) also falls back
-// to the heuristic, so the map degrades gracefully rather than dropping the file.
+// fileDefs extracts the top-level definitions of one source file, most precise
+// backend first: Go's own parser for .go, Tree-sitter for the languages with a
+// grammar (see treesitter.go), and the regex heuristic (symbols.go) for anything
+// else — or when a real parse fails mid-edit — so the map degrades gracefully
+// rather than dropping the file.
 func fileDefs(f vault.Note) []symDef {
 	if strings.HasSuffix(f.RelPath, ".go") {
 		if defs, err := goDefs(f.Body); err == nil {
 			return defs
 		}
+	} else if defs, err := tsDefs(f.RelPath, f.Body); err == nil {
+		return defs
 	}
 	return heuristicDefs(f.Body)
 }
