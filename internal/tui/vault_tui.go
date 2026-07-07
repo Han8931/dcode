@@ -1416,6 +1416,7 @@ var vaultCommandSpecs = []commandSpec{
 	{"fold", "toggle sidebar"},
 	{"help", "show keymap and commands"},
 	{"links", "alias for :backlinks"},
+	{"map", "show structural repo map (no AI)"},
 	{"new", "create a markdown note"},
 	{"note", "save last explanation as a companion note"},
 	{"open", "open project picker or path"},
@@ -1488,6 +1489,8 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		return m.cmdExplain(args)
 	case "overview":
 		return m.cmdOverview()
+	case "map", "structure":
+		return m.cmdMap()
 	case "diff":
 		return m.cmdDiff(args)
 	case "note":
@@ -1893,6 +1896,21 @@ func (m VaultModel) cmdOverview() (tea.Model, tea.Cmd) {
 	})
 	m.streamCh = ch
 	return m, tea.Batch(m.setFocus(paneChat), cmd)
+}
+
+// cmdMap renders the project's structural repository map straight into the chat.
+// Unlike :overview/:explain/:diff it calls no model — it is pure static analysis
+// — so it is instant and works even with no AI provider configured.
+func (m VaultModel) cmdMap() (tea.Model, tea.Cmd) {
+	text, err := m.svc.RepoMap()
+	if err != nil {
+		m.flash("map failed: " + err.Error())
+		return m, nil
+	}
+	m.chat.append(roleSystem, "▶ repository map — "+m.svc.ProjectName())
+	m.chat.append(roleTutor, "```\n"+text+"\n```")
+	m.flash("repository map (no AI needed)")
+	return m, m.setFocus(paneChat)
 }
 
 // cmdDiff streams an explanation of a git diff into the chat; the completed text

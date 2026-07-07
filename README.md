@@ -109,6 +109,7 @@ model = "llama3.1"
 | `:explain` · `:decode` | 🔍 explains the open file (or your Visual selection) in the chat |
 | `,d` (in Visual mode) | 🔍 decode the selected lines — shortcut for `:decode` |
 | `:overview` | 🗺️ a whole-project architecture overview, saved as an `OVERVIEW` note |
+| `:map` | 🧭 a structural map of the repo — every file's signatures, ranked (instant, **no AI needed**) |
 | `:diff` · `:diff main` | 🔀 explains your changes (`git diff`), saved as a note under `diffs/` |
 | `:ask is this thread-safe?` | 💬 a grounded chat about the open file or selection |
 | `,o` · `:open <path>` | 📂 switch to another project (recent list + path entry) |

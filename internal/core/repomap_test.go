@@ -76,6 +76,26 @@ func TestRenderRepoMapFocusAndBudget(t *testing.T) {
 	}
 }
 
+func TestServiceRepoMap(t *testing.T) {
+	s, _, _ := explainService(t, map[string]string{
+		"main.go": "package main\n\nfunc main() { helper() }\n",
+		"util.go": "package main\n\nfunc helper() {}\n",
+	})
+	out, err := s.RepoMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "func main()") || !strings.Contains(out, "func helper()") {
+		t.Fatalf("repo map should list signatures:\n%s", out)
+	}
+
+	// A project with no source files has nothing to map — an error, not "".
+	empty, _, _ := explainService(t, map[string]string{"readme.md": "# hi\n"})
+	if _, err := empty.RepoMap(); err == nil {
+		t.Fatal("RepoMap should error when there is no source to map")
+	}
+}
+
 func TestChangedPathsAndFocus(t *testing.T) {
 	diff := "diff --git a/core.go b/core.go\n" +
 		"index 111..222 100644\n--- a/core.go\n+++ b/core.go\n" +

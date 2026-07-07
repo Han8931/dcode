@@ -17,6 +17,7 @@ package core
 // later slot in behind fileDefs without touching its callers.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -25,6 +26,26 @@ import (
 
 	"dcode/internal/vault"
 )
+
+// maxDisplayMapChars bounds the map rendered for direct display by :map — larger
+// than the digests fed to the model, since here the whole structure is the point.
+const maxDisplayMapChars = 12000
+
+// RepoMap renders the project's structural repository map for direct display:
+// every source file's top-level signatures, ranked most-referenced first. It
+// calls no model — it is pure static analysis — so :map is instant and works
+// offline. It errors only when the source tree can't be read or has no code.
+func (s *Service) RepoMap() (string, error) {
+	files, err := s.code.List()
+	if err != nil {
+		return "", err
+	}
+	out := renderRepoMap(buildRepoMap(files), nil, maxDisplayMapChars)
+	if strings.TrimSpace(out) == "" {
+		return "", fmt.Errorf("no source files to map in %s", s.ProjectName())
+	}
+	return out, nil
+}
 
 // symDef is one top-level definition captured for the repo map: the signature
 // line shown to the model (e.g. "func New(cfg config.AIConfig) *Tutor"), the

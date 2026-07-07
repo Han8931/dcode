@@ -164,12 +164,15 @@ This is the headline flow. Open a source file, then:
 | *(Visual selection)* `:decode` | explains just the **selected lines** |
 | `,d` *(in Visual mode)* | shortcut for `:decode` on the selection |
 | `:note` | saves the last explanation as a companion markdown note |
+| `:map` | prints the **structural repository map** into the chat — instant, no AI needed |
 
 **Context-awareness.** An explanation always sees the whole file, not just the lines in
-view. d-code also builds **cross-file context**: a map of the project's source files
-(so the model knows the overall structure) plus the contents of the file's directory
-neighbours (its package/module), so the explanation reflects how the code connects —
-not a single file in isolation.
+view. d-code also builds **cross-file context**: a **structural repository map** of the
+project (every source file's top-level signatures, ranked so the most-referenced code
+leads) plus the referenced definitions the file depends on and the contents of its
+directory neighbours (its package/module), so the explanation reflects how the code
+connects — not a single file in isolation. The same map powers `:overview` and `:diff`,
+and you can view it directly with `:map` (pure static analysis, so it works offline).
 
 **Saving.** After `:explain`, the explanation streams into the chat and is parked; the
 conversation is seeded so you can ask follow-ups (`:ask why is this needed?`) that stay
