@@ -66,6 +66,15 @@ over one shared Go core, working on the same files.
 Install it once, then run it anywhere:
 
 ```bash
+./install.sh         # checks prerequisites, builds, installs to ~/.local/bin
+```
+
+The script verifies Go and a C compiler are present, then builds and installs
+`dcode`. Override the location with `PREFIX=/usr/local ./install.sh` or
+`./install.sh --prefix ~/bin`. Prefer Go's own tooling? `go install .` works
+too, dropping `dcode` in `~/go/bin`:
+
+```bash
 go install .         # builds and drops `dcode` on your PATH (~/go/bin)
 ```
 
