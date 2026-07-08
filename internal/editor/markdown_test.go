@@ -65,12 +65,12 @@ func TestHighlightMarkdown(t *testing.T) {
 		want string
 		desc string
 	}{
-		{0, "\x1b[1;38;5;81m# Title", "heading styled bold cyan"},
-		{1, "\x1b[38;5;222m`x := 1`", "inline code span styled"},
-		{1, "\x1b[38;5;79m[[Other Note]]", "wikilink styled"},
-		{2, "\x1b[3;38;5;244m> quoted wisdom", "blockquote styled"},
-		{3, "\x1b[38;5;222m```go", "fence delimiter styled"},
-		{4, "\x1b[1;38;5;81mfunc\x1b[0m", "go keyword highlighted inside fence"},
+		{0, "\x1b[1;38;5;111m# Title", "heading styled bold blue"},
+		{1, "\x1b[38;5;216m`x := 1`", "inline code span styled"},
+		{1, "\x1b[38;5;117m[[Other Note]]", "wikilink styled"},
+		{2, "\x1b[3;38;5;60m> quoted wisdom", "blockquote styled"},
+		{3, "\x1b[38;5;216m```go", "fence delimiter styled"},
+		{4, "\x1b[1;38;5;183mfunc\x1b[0m", "go keyword highlighted inside fence"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(rows[c.row], c.want) {
@@ -94,10 +94,10 @@ func TestHighlightMarkdown(t *testing.T) {
 	// but only when the gutter is actually drawn: with it off, a line that
 	// genuinely starts with digits must not lose them to the strip.
 	gut := highlightMarkdownRow("  1 # Gutter Heading", &mdState{gutter: true})
-	if !strings.Contains(gut, "  1 \x1b[1;38;5;81m# Gutter Heading") {
+	if !strings.Contains(gut, "  1 \x1b[1;38;5;111m# Gutter Heading") {
 		t.Errorf("gutter heading = %q", gut)
 	}
-	if row := highlightMarkdownRow("1 # not a heading", &mdState{}); strings.Contains(row, "\x1b[1;38;5;81m") {
+	if row := highlightMarkdownRow("1 # not a heading", &mdState{}); strings.Contains(row, "\x1b[1;38;5;111m") {
 		t.Errorf("digit-leading text misread as gutter+heading: %q", row)
 	}
 }
@@ -119,15 +119,15 @@ func TestHighlightMarkdownEmphasisAndLists(t *testing.T) {
 		want string
 		desc string
 	}{
-		{0, "\x1b[3;38;5;216m*italic*\x1b[0m", "italic span colored peach"},
-		{0, "\x1b[1;38;5;222m**bold**\x1b[0m", "bold span colored gold"},
-		{0, "\x1b[1;3;38;5;219m***both***\x1b[0m", "bold-italic span colored pink"},
-		{0, "\x1b[1;38;5;213m****strong****\x1b[0m", "four-star strong span colored magenta"},
-		{2, "\x1b[38;5;75m-\x1b[0m item one", "dash bullet tinted"},
-		{3, "\x1b[38;5;75m*\x1b[0m nested", "star bullet tinted"},
-		{3, "\x1b[1;38;5;222m**bold**\x1b[0m inside", "inline styling inside a list item"},
-		{4, "\x1b[38;5;75m1.\x1b[0m first step", "numbered marker tinted"},
-		{5, "\x1b[38;5;75m12)\x1b[0m twelfth step", "paren marker tinted"},
+		{0, "\x1b[3;38;5;146m*italic*\x1b[0m", "italic span colored peach"},
+		{0, "\x1b[1;38;5;189m**bold**\x1b[0m", "bold span colored gold"},
+		{0, "\x1b[1;3;38;5;189m***both***\x1b[0m", "bold-italic span colored pink"},
+		{0, "\x1b[1;38;5;183m****strong****\x1b[0m", "four-star strong span colored magenta"},
+		{2, "\x1b[38;5;183m-\x1b[0m item one", "dash bullet tinted"},
+		{3, "\x1b[38;5;183m*\x1b[0m nested", "star bullet tinted"},
+		{3, "\x1b[1;38;5;189m**bold**\x1b[0m inside", "inline styling inside a list item"},
+		{4, "\x1b[38;5;183m1.\x1b[0m first step", "numbered marker tinted"},
+		{5, "\x1b[38;5;183m12)\x1b[0m twelfth step", "paren marker tinted"},
 	} {
 		if !strings.Contains(rows[c.row], c.want) {
 			t.Errorf("%s: row %d = %q", c.desc, c.row, rows[c.row])
@@ -154,13 +154,13 @@ func TestHighlightMarkdownLinksAndRules(t *testing.T) {
 	out := highlightMarkdown(src, false, nil)
 	rows := strings.Split(out, "\n")
 
-	if !strings.Contains(rows[0], "\x1b[38;5;79m[the docs]\x1b[0m") {
+	if !strings.Contains(rows[0], "\x1b[38;5;117m[the docs]\x1b[0m") {
 		t.Errorf("link text not styled: %q", rows[0])
 	}
-	if !strings.Contains(rows[0], "\x1b[38;5;244m(https://example.com)\x1b[0m") {
+	if !strings.Contains(rows[0], "\x1b[38;5;60m(https://example.com)\x1b[0m") {
 		t.Errorf("link url not dimmed: %q", rows[0])
 	}
-	if !strings.Contains(rows[1], "\x1b[38;5;240m---") {
+	if !strings.Contains(rows[1], "\x1b[38;5;59m---") {
 		t.Errorf("thematic break not styled: %q", rows[1])
 	}
 	if rows[2] != "checkbox [x] and lone [brackets] stay plain" {
@@ -175,24 +175,24 @@ func TestHighlightMarkdownLinksAndRules(t *testing.T) {
 // can split an inline delimiter, and matching has to see through them.
 func TestHighlightMarkdownCursorOnDelimiter(t *testing.T) {
 	withANSI(t)
-	cursor := "\x1b[7;38;5;42m" // the editor's block-cursor styling
+	cursor := "\x1b[7;38;5;151m" // the editor's block-cursor styling
 
 	// Cursor on the second star of "**bold**".
 	row := "x *" + cursor + "*\x1b[0m" + "bold** y"
 	out := mdInline(row)
-	if !strings.Contains(out, "\x1b[1;38;5;222m") {
+	if !strings.Contains(out, "\x1b[1;38;5;189m") {
 		t.Errorf("split ** delimiter lost bold styling: %q", out)
 	}
 	// Cursor on the second bracket of a wikilink.
 	row = "see [" + cursor + "[\x1b[0m" + "Note]] now"
 	out = mdInline(row)
-	if !strings.Contains(out, "\x1b[38;5;79m") {
+	if !strings.Contains(out, "\x1b[38;5;117m") {
 		t.Errorf("split [[ delimiter lost link styling: %q", out)
 	}
 	// Cursor on an inline-code backtick.
 	row = "a " + cursor + "`\x1b[0m" + "x := 1` b"
 	out = mdInline(row)
-	if !strings.Contains(out, "\x1b[38;5;222m") {
+	if !strings.Contains(out, "\x1b[38;5;216m") {
 		t.Errorf("split backtick lost code styling: %q", out)
 	}
 }
@@ -209,13 +209,13 @@ func TestHighlightMarkdownScrolledFence(t *testing.T) {
 	view := "  3 func a() {}\n  4 func b() {}\n  5 ```\n  6 plain for text"
 	rows := strings.Split(highlightMarkdown(view, true, states), "\n")
 
-	if !strings.Contains(rows[0], "\x1b[1;38;5;81mfunc\x1b[0m") {
+	if !strings.Contains(rows[0], "\x1b[1;38;5;183mfunc\x1b[0m") {
 		t.Errorf("scrolled fence body lost go highlighting: %q", rows[0])
 	}
-	if !strings.Contains(rows[2], "\x1b[38;5;222m```") {
+	if !strings.Contains(rows[2], "\x1b[38;5;216m```") {
 		t.Errorf("closing fence not code-colored: %q", rows[2])
 	}
-	if !strings.Contains(rows[3], "plain for text") || strings.Contains(rows[3], "\x1b[1;38;5;81m") {
+	if !strings.Contains(rows[3], "plain for text") || strings.Contains(rows[3], "\x1b[1;38;5;183m") {
 		t.Errorf("row after the fence should be plain: %q", rows[3])
 	}
 }
@@ -233,7 +233,7 @@ func TestHighlightMarkdownQuoteSpansRows(t *testing.T) {
 	out := highlightMarkdown(src, false, nil)
 	rows := strings.Split(out, "\n")
 
-	quote := "\x1b[3;38;5;244m"
+	quote := "\x1b[3;38;5;60m"
 	if !strings.Contains(rows[0], quote+"> quoted first row") {
 		t.Errorf("quote row unstyled: %q", rows[0])
 	}
@@ -243,7 +243,7 @@ func TestHighlightMarkdownQuoteSpansRows(t *testing.T) {
 	if rows[3] != "plain after blank" {
 		t.Errorf("blank row should end the quote: %q", rows[3])
 	}
-	if !strings.Contains(rows[5], "\x1b[38;5;75m-\x1b[0m list interrupts") {
+	if !strings.Contains(rows[5], "\x1b[38;5;183m-\x1b[0m list interrupts") {
 		t.Errorf("a list item should interrupt the quote: %q", rows[5])
 	}
 	if got := stripANSI(out); got != src {

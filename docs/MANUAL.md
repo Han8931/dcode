@@ -165,6 +165,19 @@ This is the headline flow. Open a source file, then:
 | `,d` *(in Visual mode)* | shortcut for `:decode` on the selection |
 | `:note` | saves the last explanation as a companion markdown note |
 | `:map` | prints the **structural repository map** into the chat — instant, no AI needed |
+| `gd` · `:def ‹symbol›` | **go to definition** — jump to where the symbol under the cursor is defined (local-first, like Vim; no AI needed) |
+| `Ctrl-O` · `Ctrl-I` | **jump back / forward** through the jump history — chains the editor's in-file jumplist with a cross-file one, so `Ctrl-O` returns you after a `gd` into another file |
+| `T` *(in the tree)* | open the selected file in a **new tab**, staying in the tree (NERDTree `T`) |
+| `H` · `L` (or `gT` · `gt`) | previous / next tab — the `nnoremap H gT / L gt` idiom, built in |
+| `Ctrl-W q` · `:tabclose` | close the active tab (closing the last one clears the editor) |
+| `:qa` | close all tabs and quit the app |
+| `:theme ‹name›` | switch the color theme **live**: `mocha` (default) · `latte` (light) · `dracula` · `gruvbox` · `nord` · `tokyonight`; bare `:theme` lists them. Set `[ui] theme` in the config to make it stick |
+| `:config` | open `config.toml` in your external editor (`$VISUAL`/`$EDITOR`, falling back to `vi`) — creates a commented starter file if none exists. On save the config reloads: theme and pane split apply immediately; AI/provider and vault changes apply on the next start |
+
+**Tabs.** Each open file is a tab; the tab bar appears across the top of the editor
+once two or more are open. An ordinary open (`Enter`, `gd`, a fuzzy-find) reuses the
+active tab, while `T` in the tree opens a file in a *new* tab — so you can line up
+several files to read and flip between them with `gt`/`gT`.
 
 **Context-awareness.** An explanation always sees the whole file, not just the lines in
 view. d-code also builds **cross-file context**: a **structural repository map** of the

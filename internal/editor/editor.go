@@ -27,6 +27,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"dcode/internal/theme"
 )
 
 // Action is why the editor closed.
@@ -306,27 +308,54 @@ func (m *Model) Focus() tea.Cmd { return m.ta.Focus() }
 // Blur removes keyboard focus from the editor's textarea.
 func (m *Model) Blur() { m.ta.Blur() }
 
+// pal is the active theme palette; ApplyTheme rebuilds every editor style from
+// it (badges, cursors, syntax, markdown, visual mode) at init and again when
+// the app switches themes at runtime.
+var pal = theme.Current
+
 var (
-	hintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	hintStyle lipgloss.Style
 
 	// Mode badges in the status line, color-coded so the current mode is
-	// obvious at a glance (green = Normal, blue = Insert, amber = plain Edit).
-	normalBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("42")).Padding(0, 1)
-	insertBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("39")).Padding(0, 1)
-	editBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("214")).Padding(0, 1)
+	// obvious at a glance (green = Normal, blue = Insert, peach = plain Edit).
+	normalBadge, insertBadge, editBadge lipgloss.Style
 
 	// Cursor colors per mode. The cursor renders as a reverse-video block, so a
-	// foreground color here becomes the block's fill: green in Normal, bright
-	// magenta in Insert — both always visible (the cursor is static, not blinking).
-	normalCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	insertCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	// foreground color here becomes the block's fill: green in Normal, blue in
+	// Insert — both always visible (the cursor is static, not blinking).
+	normalCursor, insertCursor lipgloss.Style
 
-	keywordStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
-	typeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	stringStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	commentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
-	numberStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("215"))
+	// Syntax highlighting: keywords mauve, types yellow, strings green,
+	// comments muted-italic, numbers peach.
+	keywordStyle, typeStyle, stringStyle, commentStyle, numberStyle lipgloss.Style
 )
+
+func init() { ApplyTheme() }
+
+// ApplyTheme (re)builds the editor's styles from the active theme palette
+// (theme.Current). The parent app calls it after switching themes so the editor
+// pane recolors along with the rest of the UI.
+func ApplyTheme() {
+	pal = theme.Current
+
+	hintStyle = lipgloss.NewStyle().Foreground(pal.Overlay)
+
+	normalBadge = lipgloss.NewStyle().Bold(true).Foreground(pal.Crust).Background(pal.Green).Padding(0, 1)
+	insertBadge = lipgloss.NewStyle().Bold(true).Foreground(pal.Crust).Background(pal.Blue).Padding(0, 1)
+	editBadge = lipgloss.NewStyle().Bold(true).Foreground(pal.Crust).Background(pal.Peach).Padding(0, 1)
+
+	normalCursor = lipgloss.NewStyle().Foreground(pal.Green)
+	insertCursor = lipgloss.NewStyle().Foreground(pal.Blue)
+
+	keywordStyle = lipgloss.NewStyle().Foreground(pal.Mauve).Bold(true)
+	typeStyle = lipgloss.NewStyle().Foreground(pal.Yellow)
+	stringStyle = lipgloss.NewStyle().Foreground(pal.Green)
+	commentStyle = lipgloss.NewStyle().Foreground(pal.Overlay).Italic(true)
+	numberStyle = lipgloss.NewStyle().Foreground(pal.Peach)
+
+	applyMarkdownStyles() // markdown.go
+	applyVisualStyles()   // vim.go
+}
 
 // Open launches the editor as its own full-screen program, pre-filled with
 // starter, returning the final Result. vim selects Vim bindings; save is
@@ -531,11 +560,23 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+r":
 		m.redo()
 
-	// --- jumplist ---
+	// --- tabs --- (H/L switch tabs, Vim's `nnoremap H gT / L gt` idiom; the
+	// screen-top/bottom motions are not implemented, so the keys are free)
+	case "H":
+		return m, func() tea.Msg { return RunCommandMsg{Raw: "tabprev"} }
+	case "L":
+		return m, func() tea.Msg { return RunCommandMsg{Raw: "tabnext"} }
+
+	// --- jumplist ---  (chains to the parent's cross-file history when the
+	// in-file list is exhausted, so Ctrl-O walks back across gd jumps too)
 	case "ctrl+o":
-		m.jumpBack()
+		if !m.jumpBack() {
+			return m, func() tea.Msg { return RunCommandMsg{Raw: "jumpback"} }
+		}
 	case "tab": // terminals send Ctrl-I as Tab
-		m.jumpForward()
+		if !m.jumpForward() {
+			return m, func() tea.Msg { return RunCommandMsg{Raw: "jumpforward"} }
+		}
 
 	// --- char find & repeat ---
 	case "f", "F", "t", "T":
@@ -682,8 +723,20 @@ func (m Model) runPending(op rune, msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case 'g':
-		if key == "g" {
+		switch key {
+		case "g":
 			m.send(tea.KeyCtrlHome) // gg -> top of buffer
+		case "d":
+			// gd -> go to definition: forward the symbol under the cursor to the
+			// parent, which resolves it and jumps (possibly to another file).
+			if w := m.WordUnderCursor(); w != "" {
+				return m, func() tea.Msg { return RunCommandMsg{Raw: "def " + w} }
+			}
+			m.status = "no symbol under cursor"
+		case "t": // gt -> next editor tab (handled by the parent)
+			return m, func() tea.Msg { return RunCommandMsg{Raw: "tabnext"} }
+		case "T": // gT -> previous editor tab
+			return m, func() tea.Msg { return RunCommandMsg{Raw: "tabprev"} }
 		}
 	case 'd':
 		switch key {

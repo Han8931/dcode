@@ -60,9 +60,9 @@ var tsSpecs = map[string]tsSpec{
 		nest:   set("class_definition"),
 		unwrap: set("decorated_definition"),
 	},
-	".js": jsSpec(javascript.GetLanguage()),
+	".js":  jsSpec(javascript.GetLanguage()),
 	".jsx": jsSpec(javascript.GetLanguage()),
-	".ts": tsSpecFor(typescript.GetLanguage()),
+	".ts":  tsSpecFor(typescript.GetLanguage()),
 	".tsx": tsSpecFor(tsx.GetLanguage()),
 	".rs": {
 		lang: rust.GetLanguage(),

@@ -25,6 +25,7 @@ type Config struct {
 	VaultDir   string `toml:"-"` // resolved source/code dir to browse (see VaultConfig.Dir)
 	NotesDir   string `toml:"-"` // resolved writable notes dir (see VaultConfig.NotesDir)
 	ExportsDir string `toml:"-"` // where :export writes chat transcripts
+	Path       string `toml:"-"` // absolute path of the config file (existing or not), for :config
 }
 
 // VaultConfig locates the source tree to decode and the notes tree to save into.
@@ -129,6 +130,11 @@ func Load(path, baseDir string) (Config, error) {
 			if _, err := toml.DecodeFile(path, &cfg); err != nil {
 				return cfg, err
 			}
+		}
+		// Remember where the config lives (whether or not the file exists yet),
+		// so the in-app :config command can open or create it.
+		if abs, err := filepath.Abs(path); err == nil {
+			cfg.Path = abs
 		}
 	}
 
@@ -248,7 +254,9 @@ keybindings = "vim"
 keybindings = "vim"
 
 [ui]
-theme = "default"
+# theme: mocha (default) | latte (light) | dracula | gruvbox | nord | tokyonight
+# Switch live with :theme <name>; this sets the startup theme.
+theme = "mocha"
 # Default pane split, in percent of the width (the editor takes the rest).
 # Unset keeps the built-in defaults; :compact / :wide still adjust live.
 # sidebar_percent = 22

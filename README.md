@@ -119,12 +119,17 @@ model = "llama3.1"
 | `,d` (in Visual mode) | 🔍 decode the selected lines — shortcut for `:decode` |
 | `:overview` | 🗺️ a whole-project architecture overview, saved as an `OVERVIEW` note |
 | `:map` | 🧭 a structural map of the repo — every file's signatures, ranked (instant, **no AI needed**) |
+| `gd` · `:def <symbol>` | ⤳ go to definition — jump to where the symbol under the cursor is defined (no AI needed) |
+| `Ctrl-O` · `Ctrl-I` | ↩ jump back / forward through your jump history — **across files**, so `Ctrl-O` returns you after a `gd` |
+| `T` *(in the tree)* | 🗂️ open the selected file in a **new tab** (NERDTree-style); `H`/`L` or `gt`/`gT` switch tabs, `Ctrl-W q` / `:tabclose` close one, `:qa` quits all |
 | `:diff` · `:diff main` | 🔀 explains your changes (`git diff`), saved as a note under `diffs/` |
 | `:ask is this thread-safe?` | 💬 a grounded chat about the open file or selection |
 | `,o` · `:open <path>` | 📂 switch to another project (recent list + path entry) |
 | `,ff` · `,fg` | 🔎 fuzzy-find files / search contents |
 | `:note` | 📝 saves the current explanation as a markdown note |
 | `:polish` · `:edit make this tighter` | 🪄 an AI rewrite of a note, to review then `:apply` |
+| `:theme dracula` | 🎨 switch the color theme live — mocha · latte · dracula · gruvbox · nord · tokyonight |
+| `:config` | ⚙️ open `config.toml` in your `$EDITOR` (AI provider, default theme, panes) — reloads on save |
 
 ## 🧩 One core, two faces
 

@@ -25,22 +25,30 @@ import (
 )
 
 var (
-	mdHeadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
-	mdCodeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("222"))
-	mdLinkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("79"))
+	mdHeadingStyle, mdCodeStyle, mdLinkStyle lipgloss.Style
 	// mdURLStyle dims the "(url)" target of a [text](url) link so the link text
 	// carries the color and the noisy URL recedes.
-	mdURLStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	mdBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
-	mdRuleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	mdItalicStyle = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("216"))
+	mdURLStyle, mdBulletStyle, mdRuleStyle, mdItalicStyle lipgloss.Style
 	// Bold spans get a bright foreground on top of the attribute: many
 	// terminals render the bold attribute alone almost invisibly, and chat
-	// bodies sit on a dimmer neutral (252) that emphasis should pop out of.
-	mdBoldStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("222"))
-	mdBoldItalic  = lipgloss.NewStyle().Bold(true).Italic(true).Foreground(lipgloss.Color("219"))
-	mdStrongStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("213"))
+	// bodies sit on a dimmer neutral that emphasis should pop out of.
+	mdBoldStyle, mdBoldItalic, mdStrongStyle lipgloss.Style
 )
+
+// applyMarkdownStyles (re)builds the markdown styles from the active palette;
+// called by ApplyTheme (editor.go).
+func applyMarkdownStyles() {
+	mdHeadingStyle = lipgloss.NewStyle().Foreground(pal.Blue).Bold(true)
+	mdCodeStyle = lipgloss.NewStyle().Foreground(pal.Peach)
+	mdLinkStyle = lipgloss.NewStyle().Foreground(pal.Sapphire)
+	mdURLStyle = lipgloss.NewStyle().Foreground(pal.Overlay)
+	mdBulletStyle = lipgloss.NewStyle().Foreground(pal.Mauve)
+	mdRuleStyle = lipgloss.NewStyle().Foreground(pal.Surface2)
+	mdItalicStyle = lipgloss.NewStyle().Italic(true).Foreground(pal.Subtext)
+	mdBoldStyle = lipgloss.NewStyle().Bold(true).Foreground(pal.Text)
+	mdBoldItalic = lipgloss.NewStyle().Bold(true).Italic(true).Foreground(pal.Text)
+	mdStrongStyle = lipgloss.NewStyle().Bold(true).Foreground(pal.Mauve)
+}
 
 // lineState is the block context at the START of a buffer line: whether it
 // sits inside a fenced code block (and that fence's language) or a blockquote.

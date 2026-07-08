@@ -62,6 +62,45 @@ func (m *Model) moveTo(row, col int) {
 	m.ta, _ = m.ta.Update(repositionMsg{}) // scroll the viewport to the cursor
 }
 
+// GotoLine moves the cursor to the start of the given 1-based line — the parent
+// uses it to land the cursor on a "go to definition" target. Out-of-range lines
+// clamp to the buffer.
+func (m *Model) GotoLine(line int) {
+	if line < 1 {
+		line = 1
+	}
+	m.moveTo(line-1, 0)
+}
+
+// isIdentRune reports whether r can be part of a source identifier.
+func isIdentRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// WordUnderCursor returns the identifier the cursor sits on (or just past the end
+// of), or "" if the cursor isn't on one — the symbol a "go to definition" jumps
+// from.
+func (m *Model) WordUnderCursor() string {
+	runes := []rune(m.ta.Value())
+	row, col := m.cursorPos()
+	i := flatIndex(runes, row, col)
+	switch {
+	case i < len(runes) && isIdentRune(runes[i]):
+		// on the word
+	case i > 0 && i-1 < len(runes) && isIdentRune(runes[i-1]):
+		i-- // cursor rests just past the word's last character
+	default:
+		return ""
+	}
+	start := i
+	for start > 0 && isIdentRune(runes[start-1]) {
+		start--
+	}
+	end := i
+	for end < len(runes) && isIdentRune(runes[end]) {
+		end++
+	}
+	return string(runes[start:end])
+}
+
 // --- Vim word motions (pure text math, unit-testable) ---
 
 // flatIndex converts (row, col) to an index into text's rune slice, where rows
@@ -274,12 +313,13 @@ func (m *Model) recordJump(from jumpPos) {
 	m.jumpIdx = len(m.jumps)
 }
 
-// jumpBack moves to the previous jumplist position (Ctrl-O), stashing the
-// live position first so Ctrl-I can return to it.
-func (m *Model) jumpBack() {
+// jumpBack moves to the previous jumplist position (Ctrl-O), stashing the live
+// position first so Ctrl-I can return to it. It reports whether it moved: false
+// means the in-file history is exhausted, so the caller can chain to a wider
+// (cross-file) jumplist.
+func (m *Model) jumpBack() bool {
 	if m.jumpIdx == 0 {
-		m.status = "at oldest jump"
-		return
+		return false
 	}
 	if m.jumpIdx == len(m.jumps) {
 		m.jumps = append(m.jumps, m.curJumpPos())
@@ -287,18 +327,36 @@ func (m *Model) jumpBack() {
 	m.jumpIdx--
 	p := m.jumps[m.jumpIdx]
 	m.moveTo(p.row, p.col)
+	return true
 }
 
-// jumpForward moves to the next jumplist position (Ctrl-I / Tab).
-func (m *Model) jumpForward() {
+// jumpForward moves to the next jumplist position (Ctrl-I / Tab), reporting
+// whether it moved (see jumpBack).
+func (m *Model) jumpForward() bool {
 	if m.jumpIdx+1 >= len(m.jumps) {
-		m.status = "at newest jump"
-		return
+		return false
 	}
 	m.jumpIdx++
 	p := m.jumps[m.jumpIdx]
 	m.moveTo(p.row, p.col)
+	return true
 }
+
+// CursorLine returns the cursor's current 1-based line — the parent records it as
+// the origin of a cross-file jump (:def / gd into another file).
+func (m *Model) CursorLine() int { row, _ := m.cursorPos(); return row + 1 }
+
+// JumpToLine records the current position in the jumplist, then moves to the
+// start of the given 1-based line — a jump that Ctrl-O can undo. Used for a
+// same-file "go to definition".
+func (m *Model) JumpToLine(line int) {
+	m.recordJump(m.curJumpPos())
+	m.GotoLine(line)
+}
+
+// ResetJumps clears the in-file jumplist — the parent calls it when a different
+// file is loaded, so stale buffer positions from the old file don't linger.
+func (m *Model) ResetJumps() { m.jumps, m.jumpIdx = nil, 0 }
 
 // --- charwise cursor discipline ---
 
@@ -958,11 +1016,20 @@ func (m *Model) indentLines(n, delta int) {
 
 // Visual-mode styles: the selection bar, the cursor block, and the gutter.
 var (
-	visualSelStyle    = lipgloss.NewStyle().Background(lipgloss.Color("24")).Foreground(lipgloss.Color("231"))
-	visualCursorStyle = lipgloss.NewStyle().Reverse(true)
-	visualGutterStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	visualBadge       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("232")).Background(lipgloss.Color("75")).Padding(0, 1)
+	visualSelStyle    lipgloss.Style
+	visualCursorStyle lipgloss.Style
+	visualGutterStyle lipgloss.Style
+	visualBadge       lipgloss.Style
 )
+
+// applyVisualStyles (re)builds the Visual-mode styles from the active palette;
+// called by ApplyTheme (editor.go).
+func applyVisualStyles() {
+	visualSelStyle = lipgloss.NewStyle().Background(pal.Surface1).Foreground(pal.Text)
+	visualCursorStyle = lipgloss.NewStyle().Reverse(true)
+	visualGutterStyle = lipgloss.NewStyle().Foreground(pal.Overlay)
+	visualBadge = lipgloss.NewStyle().Bold(true).Foreground(pal.Crust).Background(pal.Mauve).Padding(0, 1)
+}
 
 // visualView renders the buffer with the active selection highlighted. The
 // textarea cannot draw selections, so Visual mode takes over rendering: line

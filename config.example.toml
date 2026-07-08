@@ -45,7 +45,9 @@ line_numbers = true
 keybindings = "vim"
 
 [ui]
-theme = "default"
+# theme: mocha (default) | latte (light) | dracula | gruvbox | nord | tokyonight
+# Sets the startup theme; switch live any time with :theme <name>.
+theme = "mocha"
 # Default pane split, in percent of the width (the editor takes the rest).
 # sidebar: 10-40, chat: 15-70. Comment out to keep the built-in defaults
 # (sidebar 22; chat 30 vertical / 55 horizontal). :compact / :wide adjust live.

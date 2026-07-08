@@ -105,10 +105,10 @@ func TestChatHighlightsFencedCode(t *testing.T) {
 	if !strings.Contains(got, "Try it.") {
 		t.Fatalf("prose after the fence lost:\n%q", got)
 	}
-	if !strings.Contains(got, "\x1b[1;38;5;81m│ \x1b[0m") {
+	if !strings.Contains(got, "\x1b[1;38;5;111m│ \x1b[0m") {
 		t.Fatalf("code gutter should be colored in chat:\n%q", got)
 	}
-	if !strings.Contains(got, "\x1b[48;5;236m") {
+	if !strings.Contains(got, "\x1b[48;5;232m") {
 		t.Fatalf("code rows should have a distinct background:\n%q", got)
 	}
 }
@@ -205,8 +205,9 @@ func TestChatDragSelectExtractsText(t *testing.T) {
 
 	// The selected span is repainted in the selection color (the highlight
 	// runs through the row's padding, terminal-style).
+	// selection color = palette Text on Surface1, downsampled to ANSI-256.
 	view := c.overlaySelection(c.vp.View())
-	if !strings.Contains(view, "\x1b[38;5;231;48;5;24malpha beta gamma") {
+	if !strings.Contains(view, "\x1b[38;5;189;48;5;59malpha beta gamma") {
 		t.Fatalf("selection overlay missing:\n%q", view)
 	}
 
@@ -566,12 +567,14 @@ func TestChatRendersMarkdownProse(t *testing.T) {
 	c.setSize(60, 20)
 	c.append(roleTutor, "# Heading\n\nuse **bold** and ****strong**** and `code` with [[Link]]")
 	content := c.renderBlock(c.blocks[0])
+	// Expected SGR codes are the theme palette (internal/theme) downsampled to
+	// ANSI-256: heading=Blue, bold=Text, strong=Mauve, code=Peach, link=Sapphire.
 	for what, want := range map[string]string{
-		"heading":  "\x1b[1;38;5;81m# Heading",
-		"bold":     "\x1b[1;38;5;222m**bold**",
-		"strong":   "\x1b[1;38;5;213m****strong****",
-		"code":     "\x1b[38;5;222m`code`",
-		"wikilink": "\x1b[38;5;79m[[Link]]",
+		"heading":  "\x1b[1;38;5;111m# Heading",
+		"bold":     "\x1b[1;38;5;189m**bold**",
+		"strong":   "\x1b[1;38;5;183m****strong****",
+		"code":     "\x1b[38;5;216m`code`",
+		"wikilink": "\x1b[38;5;117m[[Link]]",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("%s not styled in chat prose:\n%q", what, content)

@@ -7,9 +7,9 @@ import (
 
 func TestProjectDigestListsFilesAndKeyHeads(t *testing.T) {
 	s, _, _ := explainService(t, map[string]string{
-		"main.go":            "package main\n\nfunc main() { run() }\n",
+		"main.go":             "package main\n\nfunc main() { run() }\n",
 		"internal/app/run.go": "package app\n\nfunc run() {}\n",
-		"notes.md":           "# not source\n",
+		"notes.md":            "# not source\n",
 	})
 	d := s.projectDigest()
 

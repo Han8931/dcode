@@ -9,6 +9,8 @@ package tui
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path"
 	"sort"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"dcode/internal/config"
 	"dcode/internal/core"
 	"dcode/internal/editor"
+	"dcode/internal/theme"
 	"dcode/internal/tutor"
 )
 
@@ -51,6 +54,26 @@ type VaultModel struct {
 	overviewMode bool
 	diffMode     bool
 	diffRev      string
+
+	// Go-to-definition (:def / gd) landing spot: when a jump opens another file,
+	// the target line is parked here and applied once that file's content loads
+	// (an open is async — see the vOpenedMsg handler).
+	pendingGotoPath string
+	pendingGotoLine int
+
+	// Cross-file jump history, chained onto the editor's in-file jumplist: when a
+	// jump (gd/:def) crosses files, the origin is pushed onto jumpsBack so Ctrl-O
+	// returns to it, and jumpsFwd carries the Ctrl-I forward history.
+	jumpsBack []jumpSite
+	jumpsFwd  []jumpSite
+
+	// Editor tabs (NERDTree-style): each open file is a tab. tabs[activeTab] is
+	// the file shown in the editor; the tab bar is drawn when 2+ are open. T on a
+	// tree row opens it in a new tab; openNewTab flags the next open as a new
+	// (silent) tab so the single open path (vOpenedMsg) can do the bookkeeping.
+	tabs       []openTab
+	activeTab  int
+	openNewTab bool
 
 	sidebar sidebarModel
 	editor  editor.Model
@@ -214,6 +237,12 @@ func RunVault(svc *core.Service, cfg config.Config) (Outcome, error) {
 }
 
 func newVaultModel(svc *core.Service, cfg config.Config) VaultModel {
+	// Apply the configured startup theme ([ui] theme) before anything renders;
+	// unknown names keep the default rather than erroring at launch.
+	if theme.Set(cfg.UI.Theme) {
+		applyThemeStyles()
+		editor.ApplyTheme()
+	}
 	vim := cfg.VimEditor()
 	curPath := new(string)
 	m := VaultModel{
@@ -302,6 +331,11 @@ func (m VaultModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case vOpenedMsg:
+		// A T-opened file lands in a new tab and leaves focus on the tree (silent,
+		// like NERDTree's T); an ordinary open replaces the active tab and focuses
+		// the editor. Capture the flag before syncTabs consumes it.
+		newTab := m.openNewTab
+		m.openNewTab = false
 		if msg.note.Path != m.pendingEditPath {
 			m.pendingEdit, m.pendingSel = "", nil // a proposal doesn't carry to a different note
 		}
@@ -319,9 +353,22 @@ func (m VaultModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.editor.SetLanguage(langForPath(msg.note.Path, m.readOnly))
 		m.editor.SetValue(msg.note.Body)
+		m.editor.ResetJumps() // a fresh buffer starts with a clean in-file jumplist
+		// A go-to-definition jump into this file: land the cursor on the def line
+		// now that the content is loaded (SetValue reset it to the top).
+		if m.pendingGotoPath == msg.note.Path && m.pendingGotoLine > 0 {
+			m.editor.GotoLine(m.pendingGotoLine)
+		}
+		m.pendingGotoPath, m.pendingGotoLine = "", 0
 		m.backlinks = nil         // drop the previous note's backlinks until the fetch returns
 		m.expandTo(msg.note.Path) // unfold to a note opened indirectly (:new)
+		m.syncTabs(msg.note.Path, msg.note.Title, newTab)
 		m.rebuildSidebar()
+		if newTab {
+			// Silent T: the file is now a tab, but focus stays on the tree so
+			// several files can be opened in a row.
+			return m, vBacklinksCmd(m.svc, m.current)
+		}
 		return m, tea.Batch(m.setFocus(paneEditor), vBacklinksCmd(m.svc, m.current))
 
 	case vDeletedMsg:
@@ -410,6 +457,14 @@ func (m VaultModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mm.cmdSel = nil
 		return mm, cmd
 
+	case editor.OpenConfigMsg:
+		// ":config" typed in the editor's own command line — same flow as the
+		// global :config.
+		return m.cmdConfig()
+
+	case configEditedMsg:
+		return m.handleConfigEdited(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
@@ -451,6 +506,8 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.focusDir(-1)
 		case "l", "right", "j", "down", "tab", "ctrl+w":
 			return m, m.focusDir(1)
+		case "q":
+			return m.cmdTabClose() // Ctrl-W q closes the active tab (Vim window-quit)
 		}
 		return m, nil // unknown window command: ignore, like Vim
 	}
@@ -558,6 +615,13 @@ func (m VaultModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// changed by another app, git, or :publish.
 			m.flash("tree refreshed")
 			return m, vListCmd(m.svc)
+		case "T":
+			// Open the selected file in a NEW tab, staying in the tree (NERDTree T).
+			if it, ok := m.sidebar.selected(); ok && !it.dir {
+				m.openNewTab = true
+				return m, vOpenCmd(m.svc, it.id)
+			}
+			return m, nil
 		case " ":
 			// Space-mark the row (NERDTree-style multi-select), then step down
 			// so a run of files can be marked in one sweep. The vault root is
@@ -1405,8 +1469,10 @@ var vaultCommandSpecs = []commandSpec{
 	{"backlinks", "toggle linked-mentions footer"},
 	{"commands", "open command palette"},
 	{"compact", "give more width to chat"},
+	{"config", "edit config.toml in your $EDITOR (AI, theme, panes)"},
 	{"copy", "copy last assistant reply"},
 	{"decode", "explain open file or Visual selection"},
+	{"def", "go to definition of a symbol (gd in the editor)"},
 	{"diff", "explain git diff; optional rev/range"},
 	{"discard", "discard pending AI edit"},
 	{"discuss", "alias for :ask"},
@@ -1427,6 +1493,9 @@ var vaultCommandSpecs = []commandSpec{
 	{"quit", "quit"},
 	{"sidebar", "alias for :fold"},
 	{"submit", "save and submit note"},
+	{"tabclose", "close the active editor tab"},
+	{"theme", "switch color theme (:theme lists them)"},
+	{"qa", "close all tabs and quit"},
 	{"w", "save note"},
 	{"wide", "give more width to editor"},
 	{"wq", "save and quit-ish submit"},
@@ -1487,6 +1556,22 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		return m.cmdPolish(args)
 	case "explain", "decode":
 		return m.cmdExplain(args)
+	case "def", "def!":
+		return m.cmdGotoDef(args)
+	case "jumpback":
+		return m.cmdJump(-1) // Ctrl-O crossed past the start of the file's own jumplist
+	case "jumpforward":
+		return m.cmdJump(1) // Ctrl-I
+	case "tabnext":
+		return m.cmdTabSwitch(1) // gt
+	case "tabprev":
+		return m.cmdTabSwitch(-1) // gT
+	case "tabclose", "tabc":
+		return m.cmdTabClose()
+	case "theme":
+		return m.cmdTheme(args)
+	case "config":
+		return m.cmdConfig()
 	case "overview":
 		return m.cmdOverview()
 	case "map", "structure":
@@ -1546,6 +1631,10 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		}
 		return m.submitEditor()
 	case "q", "quit":
+		return m, tea.Quit
+	case "qa", "qall":
+		// Quit everything: drop all tabs and exit the app (Vim :qa).
+		m.tabs = nil
 		return m, tea.Quit
 	default:
 		m.flash("unknown command: :" + raw +
@@ -1898,6 +1987,245 @@ func (m VaultModel) cmdOverview() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.setFocus(paneChat), cmd)
 }
 
+// cmdGotoDef jumps to the definition of symbol — from :def, or the editor's gd on
+// the symbol under the cursor. It resolves against the whole source tree
+// (local-first, like Vim's gd) and either moves the cursor within the open file
+// or opens the defining file and lands on the line. Pure static analysis, so it
+// needs no AI provider and works offline.
+func (m VaultModel) cmdGotoDef(symbol string) (tea.Model, tea.Cmd) {
+	symbol = strings.TrimSpace(symbol)
+	if symbol == "" {
+		m.flash("usage: :def <symbol>  (or put the cursor on a name and press gd)")
+		return m, nil
+	}
+	loc, ok, err := m.svc.Definition(m.current, symbol)
+	switch {
+	case err != nil:
+		m.flash("go to definition failed: " + err.Error())
+		return m, nil
+	case !ok:
+		m.flash("definition not found: " + symbol)
+		return m, nil
+	}
+	if loc.Path == m.current {
+		// JumpToLine records the origin in the editor's jumplist, so Ctrl-O returns.
+		m.editor.JumpToLine(loc.Line)
+		m.flash("→ " + symbol + " · line " + itoa(loc.Line))
+		return m, m.setFocus(paneEditor)
+	}
+	// Cross-file jump: remember where we came from (so Ctrl-O crosses back), then
+	// open the defining file and land on the line once it loads (the vOpenedMsg
+	// handler applies pendingGotoLine and focuses the editor).
+	m.recordCrossJump()
+	m.pendingGotoPath = loc.Path
+	m.pendingGotoLine = loc.Line
+	m.flash("→ " + loc.Path + " · line " + itoa(loc.Line))
+	return m, vOpenCmd(m.svc, loc.Path)
+}
+
+// openTab is one editor tab: the file it holds and the cursor line to restore
+// when the user switches back to it.
+type openTab struct {
+	path  string
+	title string
+	line  int
+}
+
+// tabIndex returns the index of the tab holding path, or -1.
+func (m *VaultModel) tabIndex(path string) int {
+	for i, t := range m.tabs {
+		if t.path == path {
+			return i
+		}
+	}
+	return -1
+}
+
+// syncTabs updates the tab list after a file opens. newTab (set by T) appends a
+// tab; otherwise the file opens in place, replacing the active tab — but if it is
+// already open in another tab, that tab is activated instead of duplicated.
+func (m *VaultModel) syncTabs(path, title string, newTab bool) {
+	t := openTab{path: path, title: title, line: 1}
+	if i := m.tabIndex(path); i >= 0 {
+		m.activeTab = i // already open: focus its tab (no duplicate)
+		return
+	}
+	switch {
+	case newTab || len(m.tabs) == 0:
+		m.tabs = append(m.tabs, t)
+		m.activeTab = len(m.tabs) - 1
+	default:
+		m.tabs[m.activeTab] = t // open in place (NERDTree "o"/Enter)
+	}
+}
+
+// cmdTabSwitch moves to another tab (dir>0 next, dir<0 previous, wrapping) and
+// opens its file, restoring the saved cursor line. gt / gT drive it.
+func (m VaultModel) cmdTabSwitch(dir int) (tea.Model, tea.Cmd) {
+	if len(m.tabs) < 2 {
+		m.flash("no other tabs")
+		return m, nil
+	}
+	m.tabs[m.activeTab].line = m.editor.CursorLine() // remember where we were
+	m.activeTab = (m.activeTab + dir + len(m.tabs)) % len(m.tabs)
+	t := m.tabs[m.activeTab]
+	m.pendingGotoPath, m.pendingGotoLine = t.path, t.line
+	return m, vOpenCmd(m.svc, t.path)
+}
+
+// cmdTabClose closes the active tab (:tabclose). Closing the last tab clears the
+// editor; otherwise the neighbouring tab opens.
+func (m VaultModel) cmdTabClose() (tea.Model, tea.Cmd) {
+	if len(m.tabs) == 0 {
+		m.flash("no tab to close")
+		return m, nil
+	}
+	m.tabs = append(m.tabs[:m.activeTab], m.tabs[m.activeTab+1:]...)
+	if len(m.tabs) == 0 {
+		m.current, m.currentTitle = "", ""
+		*m.curPath = ""
+		m.editor.SetValue("")
+		m.flash("tab closed")
+		return m, m.setFocus(paneSidebar)
+	}
+	if m.activeTab >= len(m.tabs) {
+		m.activeTab = len(m.tabs) - 1
+	}
+	t := m.tabs[m.activeTab]
+	m.pendingGotoPath, m.pendingGotoLine = t.path, t.line
+	return m, vOpenCmd(m.svc, t.path)
+}
+
+// jumpSite is one cross-file jump origin: a file and the 1-based line to return
+// the cursor to.
+type jumpSite struct {
+	path string
+	line int
+}
+
+// recordCrossJump pushes the current location onto the cross-file back-history
+// and drops the forward-history (a new jump invalidates any Ctrl-I redo), so
+// Ctrl-O can return here after a jump opens another file.
+func (m *VaultModel) recordCrossJump() {
+	if m.current == "" {
+		return
+	}
+	m.jumpsBack = append(m.jumpsBack, jumpSite{path: m.current, line: m.editor.CursorLine()})
+	m.jumpsFwd = nil
+}
+
+// cmdJump walks the cross-file jump history — dir<0 is back (Ctrl-O once the
+// editor's own in-file jumplist is exhausted), dir>0 is forward (Ctrl-I). It
+// swaps the current location onto the opposite stack, Vim-style, then jumps.
+func (m VaultModel) cmdJump(dir int) (tea.Model, tea.Cmd) {
+	cur := jumpSite{path: m.current, line: m.editor.CursorLine()}
+	var target jumpSite
+	if dir < 0 {
+		if len(m.jumpsBack) == 0 {
+			m.flash("at oldest jump")
+			return m, nil
+		}
+		target = m.jumpsBack[len(m.jumpsBack)-1]
+		m.jumpsBack = m.jumpsBack[:len(m.jumpsBack)-1]
+		if cur.path != "" {
+			m.jumpsFwd = append(m.jumpsFwd, cur)
+		}
+	} else {
+		if len(m.jumpsFwd) == 0 {
+			m.flash("at newest jump")
+			return m, nil
+		}
+		target = m.jumpsFwd[len(m.jumpsFwd)-1]
+		m.jumpsFwd = m.jumpsFwd[:len(m.jumpsFwd)-1]
+		if cur.path != "" {
+			m.jumpsBack = append(m.jumpsBack, cur)
+		}
+	}
+	if target.path == m.current {
+		m.editor.GotoLine(target.line)
+		return m, m.setFocus(paneEditor)
+	}
+	m.pendingGotoPath = target.path
+	m.pendingGotoLine = target.line
+	return m, vOpenCmd(m.svc, target.path)
+}
+
+// cmdTheme switches the color theme live (:theme <name>) or, with no argument,
+// shows the current theme and what's available. The palette is process-global,
+// so both the tui and editor packages re-apply their styles; the next render
+// picks them up.
+func (m VaultModel) cmdTheme(args string) (tea.Model, tea.Cmd) {
+	name := strings.TrimSpace(args)
+	if name == "" {
+		m.flash("theme: " + theme.CurrentName() + " — available: " + strings.Join(theme.Names(), " · "))
+		return m, nil
+	}
+	if !theme.Set(name) {
+		m.flash("unknown theme " + name + " — try: " + strings.Join(theme.Names(), ", "))
+		return m, nil
+	}
+	applyThemeStyles()
+	editor.ApplyTheme()
+	m.flash("theme: " + theme.CurrentName() + " ✓ (set [ui] theme in :config to keep it)")
+	return m, nil
+}
+
+// configEditedMsg reports the external config editor finishing (see cmdConfig).
+type configEditedMsg struct{ err error }
+
+// cmdConfig opens config.toml in the user's external editor ($VISUAL/$EDITOR,
+// falling back to vi), creating a commented starter file first if none exists.
+// The TUI suspends while the editor runs; on return the config is reloaded and
+// the live-applicable settings (theme, pane split) take effect immediately.
+func (m VaultModel) cmdConfig() (tea.Model, tea.Cmd) {
+	path := m.cfg.Path
+	if path == "" {
+		m.flash("no config path — start dcode with -config <path> to use :config")
+		return m, nil
+	}
+	if err := config.EnsureFile(path); err != nil {
+		m.flash("could not create " + path + ": " + err.Error())
+		return m, nil
+	}
+	ed := os.Getenv("VISUAL")
+	if ed == "" {
+		ed = os.Getenv("EDITOR")
+	}
+	if ed == "" {
+		ed = "vi"
+	}
+	// $EDITOR may carry flags ("code -w"); split it into command + args.
+	parts := strings.Fields(ed)
+	c := exec.Command(parts[0], append(parts[1:], path)...)
+	return m, tea.ExecProcess(c, func(err error) tea.Msg { return configEditedMsg{err: err} })
+}
+
+// handleConfigEdited reloads the config after :config's editor exits, applying
+// what can change live (theme, pane split) and saying what can't (AI provider).
+func (m VaultModel) handleConfigEdited(msg configEditedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.flash("config editor failed: " + msg.err.Error())
+		return m, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+	cfg, err := config.Load(m.cfg.Path, wd)
+	if err != nil {
+		m.flash("config has an error: " + err.Error())
+		return m, nil
+	}
+	m.cfg = cfg
+	if theme.Set(cfg.UI.Theme) {
+		applyThemeStyles()
+		editor.ApplyTheme()
+	}
+	m.layout()
+	m.flash("config reloaded ✓ — AI/provider and vault changes apply on next start")
+	return m, nil
+}
+
 // cmdMap renders the project's structural repository map straight into the chat.
 // Unlike :overview/:explain/:diff it calls no model — it is pure static analysis
 // — so it is instant and works even with no AI provider configured.
@@ -2245,6 +2573,37 @@ func (m VaultModel) View() string {
 	return frame
 }
 
+// tabBarView renders the open tabs as chips across the top of the editor pane,
+// the active one filled with the accent color. Chips that don't fit are dropped
+// with an ellipsis, and the strip is padded to the full pane width.
+func (m VaultModel) tabBarView(w int) string {
+	var b strings.Builder
+	used := 0
+	for i, t := range m.tabs {
+		name := t.title
+		if strings.TrimSpace(name) == "" {
+			name = t.path
+		}
+		style := tabInactive
+		if i == m.activeTab {
+			style = tabActive
+		}
+		chip := style.Render(" " + name + " ")
+		cw := lipgloss.Width(chip)
+		if used > 0 && used+cw > w {
+			b.WriteString(tabBarFill.Render(" …"))
+			used += 2
+			break
+		}
+		b.WriteString(chip)
+		used += cw
+	}
+	if pad := w - used; pad > 0 {
+		b.WriteString(tabBarFill.Render(strings.Repeat(" ", pad)))
+	}
+	return b.String()
+}
+
 func (m VaultModel) box(p pane, w, h int, content string) string {
 	return borderStyle(m.focus == p).
 		Width(w).Height(h).
@@ -2255,7 +2614,7 @@ func (m VaultModel) box(p pane, w, h int, content string) string {
 func modalBox(w int, body string) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("39")).
+		BorderForeground(pal.Blue).
 		Padding(1, 2).
 		Width(w).
 		Render(body)
@@ -2273,7 +2632,13 @@ func (m VaultModel) editorPaneView(w int) string {
 	if w > 0 && lipgloss.Width(label) > w-2 {
 		label = truncate(label, max(1, w-2))
 	}
-	out := editorHeader.Width(w).Render(label)
+	// With 2+ tabs open the top line becomes the tab bar (NERDTree-style);
+	// otherwise it's the plain file label, so the single-file view is unchanged.
+	top := editorHeader.Width(w).Render(label)
+	if len(m.tabs) >= 2 {
+		top = m.tabBarView(w)
+	}
+	out := top
 	out += "\n" + m.editor.View()
 	for _, ln := range m.backlinkFooterLines(w) {
 		out += "\n" + ln
@@ -2291,9 +2656,12 @@ func (m VaultModel) helpView() string {
 		{"Files", "j/k move · Enter open/fold · Space mark · m node ops · r refresh · ,o open project"},
 		{"Find", ",ff find files · ,fg search contents · ,, command palette"},
 		{"Decode", ":explain/:decode open file or Visual selection · Visual ,d decode lines · :note save explanation"},
+		{"Navigate code", "gd / :def go to definition · Ctrl-O/Ctrl-I jump back/forward (across files) · :map repo map · :overview · :diff"},
+		{"Tabs", "T (in tree) open file in a new tab · H/L or gt/gT prev/next tab · Ctrl-W q / :tabclose close · :qa quit all"},
 		{"Chat", "Enter send · :ask discuss selection · Alt-A actions · Alt-O copy reply · Alt-V paste · Esc stop stream"},
 		{"AI edit", ":polish copy-edit · :edit <instruction> · :apply accept · :discard drop"},
 		{"Layout", ":fold sidebar · :wide grow editor · :compact grow chat · :backlinks toggle links"},
+		{"Appearance", ":theme <name> switch theme (mocha · latte · dracula · gruvbox · nord · tokyonight) · :config edit settings"},
 	}
 	for _, s := range sections {
 		b.WriteString(bold(s.title) + "\n")
@@ -2405,7 +2773,7 @@ func (m VaultModel) finderView() string {
 	b.WriteString(hintStyle.Render(hint))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("39")).
+		BorderForeground(pal.Blue).
 		Padding(1, 2).
 		Width(w).
 		Render(b.String())
@@ -2449,7 +2817,7 @@ func (m VaultModel) pickerView() string {
 	b.WriteString(hintStyle.Render(",o · type a path · ↑↓ pick recent · enter open · esc close"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("39")).
+		BorderForeground(pal.Blue).
 		Padding(1, 2).
 		Width(w).
 		Render(b.String())

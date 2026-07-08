@@ -64,7 +64,7 @@ func TestVisualModeKeepsViewAndHighlighting(t *testing.T) {
 		t.Fatalf("entering Visual moved the view: first line %d -> %d", before, after)
 	}
 	// The heading keeps its style under the selection.
-	if !strings.Contains(view, "\x1b[1;38;5;81m") {
+	if !strings.Contains(view, "\x1b[1;38;5;111m") {
 		t.Fatalf("Visual mode dropped markdown highlighting:\n%q", view)
 	}
 	// And the selection/cursor styling is present too.
