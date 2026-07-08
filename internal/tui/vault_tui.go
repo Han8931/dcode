@@ -54,6 +54,18 @@ type VaultModel struct {
 	overviewMode bool
 	diffMode     bool
 	diffRev      string
+	// :review state, mirroring :diff — the completed findings auto-save as a
+	// note under reviews/; reviewRev names the reviewed range. The finished
+	// findings are kept in lastReview so :tests can turn them into reproduction
+	// test files; testsMode marks that generation stream.
+	reviewMode    bool
+	reviewRev     string
+	lastReview    string
+	lastReviewRev string
+	testsMode     bool
+	// :verify state — verifyMode marks a live test run streaming into the chat
+	// (no auto-save; the run's verdict lives in the transcript).
+	verifyMode bool
 
 	// Go-to-definition (:def / gd) landing spot: when a jump opens another file,
 	// the target line is parked here and applied once that file's content loads
@@ -1489,6 +1501,9 @@ var vaultCommandSpecs = []commandSpec{
 	{"overview", "generate project architecture overview"},
 	{"paste", "paste clipboard into chat input"},
 	{"polish", "copy-edit note/selection with AI"},
+	{"review", "hunt for defects in a diff; optional rev/range"},
+	{"tests", "write reproduction tests for the last :review"},
+	{"verify", "run the test suite (:verify shows, :verify! runs)"},
 	{"q", "quit"},
 	{"quit", "quit"},
 	{"sidebar", "alias for :fold"},
@@ -1578,6 +1593,14 @@ func (m VaultModel) runEx(raw string) (tea.Model, tea.Cmd) {
 		return m.cmdMap()
 	case "diff":
 		return m.cmdDiff(args)
+	case "review":
+		return m.cmdReview(args)
+	case "tests", "gentests":
+		return m.cmdTests()
+	case "verify":
+		return m.cmdVerify(args, false)
+	case "verify!":
+		return m.cmdVerify(args, true)
 	case "note":
 		return m.cmdSaveExplanation()
 	case "apply":
@@ -1849,6 +1872,9 @@ func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 			m.explaining = false
 			m.overviewMode = false
 			m.diffMode = false
+			m.reviewMode = false
+			m.testsMode = false
+			m.verifyMode = false
 			m.streamCancel = nil
 			m.chat.append(roleSystem, "— tutor reply stopped —")
 			return m, nil
@@ -1862,6 +1888,9 @@ func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 		m.explaining = false
 		m.overviewMode = false
 		m.diffMode = false
+		m.reviewMode = false
+		m.testsMode = false
+		m.verifyMode = false
 		m.streamCancel = nil
 		m.chat.failStream("⚠ chat failed: " + msg.err.Error())
 		return m, nil
@@ -1886,6 +1915,23 @@ func (m VaultModel) handleStreamChunk(msg streamChunkMsg) (tea.Model, tea.Cmd) {
 			m.diffMode = false
 			m.chat.append(roleSystem, "— change explained · saving under diffs/ —")
 			return m, vDiffSaveCmd(m.svc, m.diffRev, msg.full)
+		}
+		if m.reviewMode {
+			m.reviewMode = false
+			m.lastReview = msg.full
+			m.lastReviewRev = m.reviewRev
+			m.chat.append(roleSystem, "— review complete · saving under reviews/ · :tests writes reproduction tests for these findings —")
+			return m, vReviewSaveCmd(m.svc, m.reviewRev, msg.full)
+		}
+		if m.testsMode {
+			m.testsMode = false
+			m.chat.append(roleSystem, "— tests generated · saving under reviews/ · copy them into your repo to run —")
+			return m, vTestsSaveCmd(m.svc, m.lastReviewRev, msg.full)
+		}
+		if m.verifyMode {
+			m.verifyMode = false
+			m.chat.append(roleSystem, "— verify run finished —")
+			return m, nil
 		}
 		if m.explaining {
 			m.explaining = false
@@ -2278,6 +2324,126 @@ func (m VaultModel) cmdDiff(args string) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.setFocus(paneChat), cmd)
 }
 
+// cmdReview streams an adversarial defect review of a git diff into the chat;
+// the completed findings auto-save as a note under reviews/ (see
+// handleStreamChunk). args is the git range — empty reviews the working changes.
+func (m VaultModel) cmdReview(args string) (tea.Model, tea.Cmd) {
+	switch {
+	case m.svc.Offline():
+		m.flash("reviewing needs an AI provider — run `dcode check`, then :review")
+		return m, nil
+	case m.streaming:
+		m.flash("busy — try :review again in a moment")
+		return m, nil
+	}
+
+	rev := strings.TrimSpace(args)
+	m.pending++
+	m.loadKind = "review"
+	m.streaming = true
+	m.streamStopping = false
+	m.reviewMode = true
+	m.reviewRev = rev
+	label := rev
+	if label == "" {
+		label = "working changes"
+	}
+	m.chat.append(roleSystem, "▶ reviewing "+label+" for defects…")
+	m.chat.beginStream()
+
+	svc := m.svc
+	ctx, cancel := context.WithCancel(context.Background())
+	m.streamCancel = cancel
+	ch, cmd := startChatStream(ctx, func(ctx context.Context, onDelta func(string)) (string, error) {
+		return svc.ReviewStream(ctx, rev, onDelta)
+	})
+	m.streamCh = ch
+	return m, tea.Batch(m.setFocus(paneChat), cmd)
+}
+
+// cmdTests turns the last :review's findings into reproduction test files —
+// each claimed defect becomes a runnable check. The generated files stream into
+// the chat and auto-save as a note beside the review (see handleStreamChunk);
+// dcode never writes them into the source tree itself.
+func (m VaultModel) cmdTests() (tea.Model, tea.Cmd) {
+	switch {
+	case m.svc.Offline():
+		m.flash("generating tests needs an AI provider — run `dcode check`, then :tests")
+		return m, nil
+	case m.streaming:
+		m.flash("busy — try :tests again in a moment")
+		return m, nil
+	case strings.TrimSpace(m.lastReview) == "":
+		m.flash("run :review first — :tests writes reproduction tests for its findings")
+		return m, nil
+	}
+
+	m.pending++
+	m.loadKind = "tests"
+	m.streaming = true
+	m.streamStopping = false
+	m.testsMode = true
+	label := m.lastReviewRev
+	if label == "" {
+		label = "working changes"
+	}
+	m.chat.append(roleSystem, "▶ writing reproduction tests for the review of "+label+"…")
+	m.chat.beginStream()
+
+	svc := m.svc
+	rev, findings := m.lastReviewRev, m.lastReview
+	ctx, cancel := context.WithCancel(context.Background())
+	m.streamCancel = cancel
+	ch, cmd := startChatStream(ctx, func(ctx context.Context, onDelta func(string)) (string, error) {
+		return svc.TestsStream(ctx, rev, findings, onDelta)
+	})
+	m.streamCh = ch
+	return m, tea.Batch(m.setFocus(paneChat), cmd)
+}
+
+// cmdVerify runs the project's test suite (:verify! — the ONE dcode flow that
+// executes project code, which is why it demands the bang). A bare :verify is
+// the consent gate: it shows what would run and does nothing. args optionally
+// names the command; otherwise it is auto-detected from the project root.
+// Offline is fine — the run needs no AI; only the failure interpretation does.
+func (m VaultModel) cmdVerify(args string, confirmed bool) (tea.Model, tea.Cmd) {
+	if m.streaming {
+		m.flash("busy — try :verify again in a moment")
+		return m, nil
+	}
+	command := strings.TrimSpace(args)
+	if command == "" {
+		detected, ok := m.svc.DetectTestCommand()
+		if !ok {
+			m.flash("couldn't detect a test command — name one: :verify! <command>")
+			return m, nil
+		}
+		command = detected
+	}
+	if !confirmed {
+		// The consent gate: :verify never executes; :verify! does.
+		m.flash("would run `" + command + "` in " + m.svc.ProjectRoot() + " — confirm with :verify! ")
+		return m, nil
+	}
+
+	m.pending++
+	m.loadKind = "verifying"
+	m.streaming = true
+	m.streamStopping = false
+	m.verifyMode = true
+	m.chat.append(roleSystem, "▶ running `"+command+"` … (Esc stops it)")
+	m.chat.beginStream()
+
+	svc := m.svc
+	ctx, cancel := context.WithCancel(context.Background())
+	m.streamCancel = cancel
+	ch, cmd := startChatStream(ctx, func(ctx context.Context, onDelta func(string)) (string, error) {
+		return svc.VerifyStream(ctx, command, onDelta)
+	})
+	m.streamCh = ch
+	return m, tea.Batch(m.setFocus(paneChat), cmd)
+}
+
 // cmdSaveExplanation saves the last explanation as a companion markdown note,
 // mirroring the source path under the separate notes dir.
 func (m VaultModel) cmdSaveExplanation() (tea.Model, tea.Cmd) {
@@ -2657,6 +2823,7 @@ func (m VaultModel) helpView() string {
 		{"Find", ",ff find files · ,fg search contents · ,, command palette"},
 		{"Decode", ":explain/:decode open file or Visual selection · Visual ,d decode lines · :note save explanation"},
 		{"Navigate code", "gd / :def go to definition · Ctrl-O/Ctrl-I jump back/forward (across files) · :map repo map · :overview · :diff"},
+		{"Verify", ":review find defects · :tests write reproduction tests for the findings · :verify! run the test suite (Esc stops; bare :verify previews)"},
 		{"Tabs", "T (in tree) open file in a new tab · H/L or gt/gT prev/next tab · Ctrl-W q / :tabclose close · :qa quit all"},
 		{"Chat", "Enter send · :ask discuss selection · Alt-A actions · Alt-O copy reply · Alt-V paste · Esc stop stream"},
 		{"AI edit", ":polish copy-edit · :edit <instruction> · :apply accept · :discard drop"},
@@ -3113,6 +3280,36 @@ func vOverviewSaveCmd(svc *core.Service, text string) tea.Cmd {
 
 // vDiffSaveCmd saves a streamed change explanation as a note under diffs/, then
 // opens it.
+// vTestsSaveCmd persists generated reproduction tests beside their review.
+func vTestsSaveCmd(svc *core.Service, rev, text string) tea.Cmd {
+	return func() tea.Msg {
+		meta, err := svc.SaveGeneratedTests(rev, text)
+		if err != nil {
+			return vErrMsg{kind: "save tests", err: err}
+		}
+		n, err := svc.OpenNote(meta.Path)
+		if err != nil {
+			return vErrMsg{kind: "open", err: err}
+		}
+		return vOpenedMsg{note: n}
+	}
+}
+
+// vReviewSaveCmd persists :review findings under reviews/ and opens the note.
+func vReviewSaveCmd(svc *core.Service, rev, text string) tea.Cmd {
+	return func() tea.Msg {
+		meta, err := svc.SaveReview(rev, text)
+		if err != nil {
+			return vErrMsg{kind: "save review", err: err}
+		}
+		n, err := svc.OpenNote(meta.Path)
+		if err != nil {
+			return vErrMsg{kind: "open", err: err}
+		}
+		return vOpenedMsg{note: n}
+	}
+}
+
 func vDiffSaveCmd(svc *core.Service, rev, text string) tea.Cmd {
 	return func() tea.Msg {
 		meta, err := svc.SaveDiffExplanation(rev, text)

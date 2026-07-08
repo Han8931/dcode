@@ -123,6 +123,9 @@ model = "llama3.1"
 | `Ctrl-O` · `Ctrl-I` | ↩ jump back / forward through your jump history — **across files**, so `Ctrl-O` returns you after a `gd` |
 | `T` *(in the tree)* | 🗂️ open the selected file in a **new tab** (NERDTree-style); `H`/`L` or `gt`/`gT` switch tabs, `Ctrl-W q` / `:tabclose` close one, `:qa` quits all |
 | `:diff` · `:diff main` | 🔀 explains your changes (`git diff`), saved as a note under `diffs/` |
+| `:review` · `:review main` | 🕵️ hunts for **defects** in your changes — severity-ranked findings with failure scenarios, saved under `reviews/` |
+| `:tests` | 🧪 turns the last review's findings into **reproduction test files**, staged as real files ready to `cp` in — a failing test proves the finding was real |
+| `:verify` → `:verify!` | ✅ runs your **test suite** (auto-detected: `go test` / `pytest` / `npm test` / …) with live output; failures get an AI interpretation. Bare `:verify` only previews the command — the `!` is the consent to execute |
 | `:ask is this thread-safe?` | 💬 a grounded chat about the open file or selection |
 | `,o` · `:open <path>` | 📂 switch to another project (recent list + path entry) |
 | `,ff` · `,fg` | 🔎 fuzzy-find files / search contents |
